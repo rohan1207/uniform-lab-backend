@@ -8,6 +8,7 @@ const morgan = require('morgan');
 const schoolRouter = require('./routes/schools');
 const productRouter = require('./routes/products');
 const categoryRouter = require('./routes/categories');
+const gradeRouter = require('./routes/grades');
 const orderRouter = require('./routes/orders');
 const deliveryPartnerRouter = require('./routes/deliveryPartners');
 const seoRouter = require('./routes/seo');
@@ -35,6 +36,11 @@ app.get('/api/health', (req, res) => {
   res.json({ ok: true, message: 'Uniform Lab backend is running' });
 });
 
+// UptimeRobot / monitoring: GET /ping returns pong
+app.get('/ping', (req, res) => {
+  res.status(200).send('pong');
+});
+
 // Public APIs for storefront
 app.use('/api/public/schools', schoolRouter.public);
 app.use('/api/public/products', productRouter.public);
@@ -51,6 +57,7 @@ app.use('/api/admin/auth', adminAuthRouter);
 app.use('/api/admin/upload', uploadRouter);
 app.use('/api/admin/schools', adminAuth, schoolRouter.admin);
 app.use('/api/admin/categories', adminAuth, categoryRouter.admin);
+app.use('/api/admin/grades', adminAuth, gradeRouter.admin);
 app.use('/api/admin/products', adminAuth, productRouter.admin);
 app.use('/api/admin/orders', adminAuth, orderRouter.admin);
 app.use('/api/admin/delivery-partners', adminAuth, deliveryPartnerRouter.admin);

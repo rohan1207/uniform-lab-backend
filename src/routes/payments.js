@@ -3,6 +3,7 @@ const https = require('https');
 const crypto = require('crypto');
 const Order = require('../models/Order');
 const CheckoutSession = require('../models/CheckoutSession');
+const Product = require('../models/Product');
 
 const publicRouter = express.Router();
 
@@ -23,7 +24,7 @@ function getBackendBaseUrl(req) {
 }
 
 // Helper: call Instamojo Payment Request API
-function createPaymentRequest(req, { amount, buyerName, email, phone }) {
+function createPaymentRequest(req, { amount, buyerName, email, phone, purpose }) {
   const { apiKey, authToken, baseUrl } = getInstamojoConfig();
   const base = baseUrl.replace(/\/+$/, '');
   // IMPORTANT: do NOT start path with '/', otherwise the '/api/1.1' part is dropped.
@@ -35,7 +36,7 @@ function createPaymentRequest(req, { amount, buyerName, email, phone }) {
 
   const body = new URLSearchParams({
     amount: String(amount),
-    purpose: 'Uniform Lab order',
+    purpose: purpose || 'Uniform Lab order',
     buyer_name: buyerName || '',
     email: email || '',
     phone: phone || '',
@@ -133,11 +134,21 @@ publicRouter.post('/instamojo/checkout', async (req, res) => {
 
   const normAmount = Number(totalAmount);
 
+  const firstItem = items[0] || {};
+  const baseName = firstItem.productName || firstItem.name || 'Uniform Lab order';
+  let purpose = baseName;
+  if (firstItem.size) {
+    purpose += ` (Size ${firstItem.size})`;
+  }
+  purpose = `${purpose} – Uniform Lab`;
+  if (purpose.length > 90) purpose = purpose.slice(0, 90);
+
   const paymentRequest = await createPaymentRequest(req, {
     amount: normAmount,
     buyerName: customerName,
     email: customerEmail,
     phone: customerPhone,
+    purpose,
   });
 
   await CheckoutSession.create({
@@ -200,6 +211,7 @@ publicRouter.post('/instamojo/webhook', async (req, res) => {
 
   const status = payload.status;
   const paymentRequestId = payload.payment_request_id;
+  const paymentId = payload.payment_id;
 
   const session = await CheckoutSession.findOne({ paymentRequestId });
   if (!session) {
@@ -208,9 +220,25 @@ publicRouter.post('/instamojo/webhook', async (req, res) => {
   }
 
   if (status === 'Credit' && session.status === 'Pending') {
+    // Resolve school from first product (all items are from same school)
+    let schoolId;
+    try {
+      const firstItem = (session.items || [])[0];
+      if (firstItem && firstItem.productId) {
+        const product = await Product.findById(firstItem.productId).select('school');
+        if (product && product.school) {
+          schoolId = product.school;
+        }
+      }
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error('Failed to resolve school for order', err);
+    }
+
     // Create paid order
     await Order.create({
       uniqueOrderId: require('../utils/orderId')(),
+      school: schoolId,
       customerName: session.customerName,
       customerEmail: session.customerEmail,
       customerPhone: session.customerPhone,
@@ -227,6 +255,9 @@ publicRouter.post('/instamojo/webhook', async (req, res) => {
       totalAmount: session.totalAmount,
       paymentMethod: 'Online',
       paymentStatus: 'Paid',
+      gatewayPaymentId: paymentId,
+      gatewayPaymentRequestId: paymentRequestId,
+      gatewayRawWebhook: payload,
     });
 
     session.status = 'Completed';

@@ -21,6 +21,8 @@ publicRouter.get('/:slug', async (req, res) => {
   }
   const categories = await Category.find({ school: school._id }).sort({ sortOrder: 1, name: 1 });
   const products = await Product.find({ school: school._id, isActive: true })
+    .populate('grade', '_id name')
+    .populate('category', '_id name slug')
     .lean();
   res.json({ school, categories, products });
 });

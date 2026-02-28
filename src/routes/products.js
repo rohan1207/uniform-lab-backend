@@ -59,6 +59,7 @@ function buildProductFromBody(body) {
   const {
     schoolId,
     categoryId,
+    gradeId,
     name,
     slug,
     description,
@@ -80,6 +81,7 @@ function buildProductFromBody(body) {
   const base = {
     school: schoolId,
     category: categoryId,
+    grade: gradeId || undefined,
     name,
     description,
     gender,
@@ -175,6 +177,10 @@ adminRouter.patch('/:id', async (req, res) => {
   if (update.categoryId) {
     update.category = update.categoryId;
     delete update.categoryId;
+  }
+  if (update.gradeId !== undefined) {
+    update.grade = update.gradeId || null;
+    delete update.gradeId;
   }
   if (update.name && !update.slug) {
     update.slug = update.name

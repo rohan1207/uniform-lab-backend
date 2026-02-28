@@ -161,7 +161,9 @@ router.get('/orders', async (req, res) => {
   }
 
   const email = customer.email;
-  const orders = await Order.find({ customerEmail: email }).sort({ createdAt: -1 });
+  const orders = await Order.find({ customerEmail: email })
+    .populate('school', 'name')
+    .sort({ createdAt: -1 });
   return res.json(orders);
 });
 

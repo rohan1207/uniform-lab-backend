@@ -1,6 +1,7 @@
 const express = require('express');
 const Order = require('../models/Order');
 const DeliveryPartner = require('../models/DeliveryPartner');
+const Product = require('../models/Product');
 const generateUniqueOrderId = require('../utils/orderId');
 
 const publicRouter = express.Router();
@@ -64,18 +65,40 @@ adminRouter.get('/', async (req, res) => {
   const { schoolId } = req.query;
   const query = {};
   if (schoolId) query.school = schoolId;
-  const orders = await Order.find(query)
+
+  let orders = await Order.find(query)
     .populate('assignedDeliveryPartner', 'name phone')
+    .populate('school', 'name')
     .sort({ createdAt: -1 });
+
+  // Backfill missing school for older orders using first line item's product
+  const needsBackfill = orders.filter(
+    (o) => !o.school && Array.isArray(o.items) && o.items[0] && o.items[0].product
+  );
+
+  for (const order of needsBackfill) {
+    try {
+      const first = order.items[0];
+      const product = await Product.findById(first.product).select('school');
+      if (product && product.school) {
+        order.school = product.school;
+        await order.save();
+        await order.populate('school', 'name');
+      }
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error('Failed to backfill order.school', order._id.toString(), err);
+    }
+  }
+
   res.json(orders);
 });
 
 // GET /api/admin/orders/:id
 adminRouter.get('/:id', async (req, res) => {
-  const order = await Order.findById(req.params.id).populate(
-    'assignedDeliveryPartner',
-    'name phone'
-  );
+  const order = await Order.findById(req.params.id)
+    .populate('assignedDeliveryPartner', 'name phone')
+    .populate('school', 'name');
   if (!order) {
     return res.status(404).json({ error: { message: 'Order not found' } });
   }

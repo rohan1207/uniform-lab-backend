@@ -32,6 +32,7 @@ const productSchema = new mongoose.Schema(
   {
     school: { type: mongoose.Schema.Types.ObjectId, ref: 'School', required: true },
     category: { type: mongoose.Schema.Types.ObjectId, ref: 'Category', required: true },
+    grade: { type: mongoose.Schema.Types.ObjectId, ref: 'Grade' },
     name: { type: String, required: true },
     slug: { type: String },
     description: { type: String },

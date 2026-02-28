@@ -39,6 +39,10 @@ const orderSchema = new mongoose.Schema(
     totalAmount: { type: Number, required: true },
     paymentMethod: { type: String, enum: ['COD', 'Online', 'Unknown'], default: 'COD' },
     paymentStatus: { type: String, enum: ['Paid', 'Pending'], default: 'Pending' },
+    // Instamojo / payment gateway metadata
+    gatewayPaymentId: { type: String },
+    gatewayPaymentRequestId: { type: String },
+    gatewayRawWebhook: { type: mongoose.Schema.Types.Mixed },
     fulfillmentStatus: {
       type: String,
       enum: ['Unfulfilled', 'Fulfilled'],
