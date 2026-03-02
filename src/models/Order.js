@@ -64,5 +64,8 @@ const orderSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
+// Speed up customer order lookups
+orderSchema.index({ customerEmail: 1, createdAt: -1 });
+
 module.exports = mongoose.model('Order', orderSchema);
 

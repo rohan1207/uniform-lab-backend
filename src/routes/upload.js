@@ -105,6 +105,17 @@ router.post('/product-image', uploadMiddleware, async (req, res) => {
   const schoolSlug = await resolveSchoolSlug(req);
   const categorySlug = normalizeSegment(req.body.categorySlug, 'category');
   const productSlug = normalizeSegment(req.body.productSlug || req.body.productId || req.body.productName, 'product');
+  const colorSlug = normalizeSegment(req.body.colorName, '');
+  const imageIndex = req.body.imageIndex || '0';
+
+  // Build a unique public_id per product + color + index to prevent overwrites
+  let publicId = productSlug || undefined;
+  if (publicId && colorSlug) {
+    publicId = `${publicId}-${colorSlug}-${imageIndex}`;
+  } else if (publicId) {
+    // Main image or gallery image — add timestamp to avoid overwriting
+    publicId = `${publicId}-${Date.now()}`;
+  }
 
   const folder = `products/${schoolSlug}/${categorySlug}`;
 
@@ -112,7 +123,7 @@ router.post('/product-image', uploadMiddleware, async (req, res) => {
     const uploadStream = cloudinary.uploader.upload_stream(
       {
         folder,
-        public_id: productSlug || undefined,
+        public_id: publicId,
         resource_type: 'image',
       },
       (err, result) => {

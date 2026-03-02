@@ -27,7 +27,8 @@ async function destroyCloudinaryIds(publicIds) {
 // PUBLIC
 // GET /api/public/products/:id
 publicRouter.get('/:id', async (req, res) => {
-  const product = await Product.findById(req.params.id).populate('school', 'name slug');
+  res.set('Cache-Control', 'public, max-age=60, stale-while-revalidate=120');
+  const product = await Product.findById(req.params.id).populate('school', 'name slug').lean();
   if (!product || !product.isActive) {
     return res.status(404).json({ error: { message: 'Product not found' } });
   }

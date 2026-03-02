@@ -3,6 +3,7 @@ const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
 const morgan = require('morgan');
+const compression = require('compression');
 
 // Routers
 const schoolRouter = require('./routes/schools');
@@ -24,6 +25,7 @@ const paymentRouter = require('./routes/payments');
 const app = express();
 
 app.use(helmet());
+app.use(compression());
 app.use(
   cors({
     origin: '*', // adjust when you wire to specific domains

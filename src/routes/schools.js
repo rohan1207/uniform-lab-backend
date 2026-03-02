@@ -9,21 +9,26 @@ const publicRouter = express.Router();
 
 // GET /api/public/schools
 publicRouter.get('/', async (req, res) => {
-  const schools = await School.find({ isActive: true }).select('name slug logoUrl imageUrl level');
+  res.set('Cache-Control', 'public, max-age=120, stale-while-revalidate=300');
+  const schools = await School.find({ isActive: true }).select('name slug logoUrl imageUrl level').lean();
   res.json(schools);
 });
 
 // GET /api/public/schools/:slug - school with categories + products
 publicRouter.get('/:slug', async (req, res) => {
-  const school = await School.findOne({ slug: req.params.slug, isActive: true });
+  res.set('Cache-Control', 'public, max-age=60, stale-while-revalidate=120');
+  const school = await School.findOne({ slug: req.params.slug, isActive: true }).lean();
   if (!school) {
     return res.status(404).json({ error: { message: 'School not found' } });
   }
-  const categories = await Category.find({ school: school._id }).sort({ sortOrder: 1, name: 1 });
-  const products = await Product.find({ school: school._id, isActive: true })
-    .populate('grade', '_id name')
-    .populate('category', '_id name slug')
-    .lean();
+  // Run both queries in parallel instead of sequentially
+  const [categories, products] = await Promise.all([
+    Category.find({ school: school._id }).sort({ sortOrder: 1, name: 1 }).lean(),
+    Product.find({ school: school._id, isActive: true })
+      .populate('grade', '_id name')
+      .populate('category', '_id name slug')
+      .lean(),
+  ]);
   res.json({ school, categories, products });
 });
 
