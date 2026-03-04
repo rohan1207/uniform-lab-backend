@@ -3,6 +3,7 @@ const Order = require('../models/Order');
 const DeliveryPartner = require('../models/DeliveryPartner');
 const Product = require('../models/Product');
 const generateUniqueOrderId = require('../utils/orderId');
+const { sendOrderStatusEmail } = require('../utils/emailService');
 
 const publicRouter = express.Router();
 const adminRouter = express.Router();
@@ -105,6 +106,15 @@ adminRouter.get('/:id', async (req, res) => {
   res.json(order);
 });
 
+// Maps Order.deliveryStatus enum values → emailService STATUS_CONFIG keys
+const DELIVERY_EMAIL_MAP = {
+  'Order confirmed': 'confirmed',
+  'Packed':          'processing',
+  'Shipped':         'shipped',
+  'Delivered':       'delivered',
+  'Undelivered':     'cancelled',
+};
+
 // PATCH /api/admin/orders/:id  – update fulfillment/delivery/assigned partner/notes
 adminRouter.patch('/:id', async (req, res) => {
   const {
@@ -124,6 +134,11 @@ adminRouter.patch('/:id', async (req, res) => {
   if (paymentStatus) update.paymentStatus = paymentStatus;
   if (assignedDeliveryPartnerId) update.assignedDeliveryPartner = assignedDeliveryPartnerId;
 
+  // Snapshot previous deliveryStatus BEFORE the update (only when deliveryStatus is changing)
+  const previousOrder = deliveryStatus
+    ? await Order.findById(req.params.id).select('deliveryStatus customerEmail customerName').lean()
+    : null;
+
   const order = await Order.findByIdAndUpdate(req.params.id, update, {
     new: true,
     runValidators: true,
@@ -132,6 +147,30 @@ adminRouter.patch('/:id', async (req, res) => {
   if (!order) {
     return res.status(404).json({ error: { message: 'Order not found' } });
   }
+
+  // ── Non-blocking order status email ──────────────────────────────────────────
+  // Fires when deliveryStatus actually changes AND customer has an email.
+  // Errors are caught and logged — they NEVER affect the HTTP response.
+  if (
+    previousOrder &&
+    deliveryStatus &&
+    deliveryStatus !== previousOrder.deliveryStatus
+  ) {
+    const emailKey = DELIVERY_EMAIL_MAP[deliveryStatus];
+    const emailAddr = order.customerEmail || previousOrder.customerEmail;
+    const custName  = order.customerName  || previousOrder.customerName || 'Customer';
+
+    if (emailKey && emailAddr) {
+      sendOrderStatusEmail(emailAddr, custName, order, emailKey).catch((err) => {
+        console.error(
+          `[OrderEmail] Failed for order ${order.uniqueOrderId || order._id} → ${deliveryStatus}:`,
+          err.message
+        );
+      });
+    }
+  }
+  // ─────────────────────────────────────────────────────────────────────────────
+
   res.json(order);
 });
 
