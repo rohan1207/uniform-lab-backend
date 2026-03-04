@@ -21,6 +21,7 @@ const customerAuthRouter = require('./routes/customerAuth');
 const customerRouter = require('./routes/customer');
 const customerAuth = require('./middleware/customerAuth');
 const paymentRouter = require('./routes/payments');
+const exchangeRequestRouter = require('./routes/exchangeRequests');
 
 const app = express();
 
@@ -53,6 +54,7 @@ app.use('/api/public/payments', paymentRouter.public);
 
 // Customer APIs (require customer auth)
 app.use('/api/customer', customerAuth, customerRouter);
+app.use('/api/customer/exchange-requests', customerAuth, exchangeRequestRouter.customerRouter);
 
 // Admin APIs (protect with auth later; upload kept open for now so CMS UI can call it directly)
 app.use('/api/admin/auth', adminAuthRouter);
@@ -62,6 +64,7 @@ app.use('/api/admin/categories', adminAuth, categoryRouter.admin);
 app.use('/api/admin/grades', adminAuth, gradeRouter.admin);
 app.use('/api/admin/products', adminAuth, productRouter.admin);
 app.use('/api/admin/orders', adminAuth, orderRouter.admin);
+app.use('/api/admin/exchange-requests', adminAuth, exchangeRequestRouter.adminRouter);
 app.use('/api/admin/delivery-partners', adminAuth, deliveryPartnerRouter.admin);
 app.use('/api/admin/seo', adminAuth, seoRouter.admin);
 
