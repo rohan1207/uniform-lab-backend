@@ -104,5 +104,17 @@ router.post('/login', async (req, res) => {
   });
 });
 
+// POST /api/public/auth/check-email
+// Returns { exists: true|false } — never reveals sensitive info
+router.post('/check-email', async (req, res) => {
+  const { email } = req.body || {};
+  if (!email) {
+    return res.status(400).json({ error: { message: 'Email is required' } });
+  }
+  const normalizedEmail = String(email).toLowerCase().trim();
+  const exists = !!(await Customer.findOne({ email: normalizedEmail }).select('_id').lean());
+  return res.json({ exists });
+});
+
 module.exports = router;
 
