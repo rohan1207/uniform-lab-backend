@@ -40,29 +40,29 @@ function emailWrapper(bodyHtml, previewText = '') {
 </head>
 <body style="margin:0;padding:0;background:#f0f4f8;font-family:'Segoe UI',Arial,Helvetica,sans-serif;-webkit-font-smoothing:antialiased;">
   ${previewText ? `<div style="display:none;max-height:0;overflow:hidden;mso-hide:all;">${previewText}</div>` : ''}
-  <table width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#f0f4f8;padding:40px 16px;">
+  <table width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#f0f4f8;padding:24px 12px;">
     <tr>
       <td align="center">
-        <table width="100%" cellpadding="0" cellspacing="0" border="0" style="max-width:560px;background:#ffffff;border-radius:18px;overflow:hidden;box-shadow:0 4px 32px rgba(0,0,0,0.08);">
+        <table width="100%" cellpadding="0" cellspacing="0" border="0" style="max-width:560px;background:#ffffff;border-radius:16px;overflow:hidden;box-shadow:0 4px 32px rgba(0,0,0,0.08);">
           <!-- HEADER -->
           <tr>
-            <td style="background:linear-gradient(135deg,#1a6bb8 0%,#004C99 60%,#003580 100%);padding:28px 40px;text-align:center;">
-              <h1 style="margin:0;color:#ffffff;font-size:24px;font-weight:800;letter-spacing:-0.5px;">The Uniform Lab</h1>
-              <p style="margin:6px 0 0;color:rgba(255,255,255,0.7);font-size:12px;letter-spacing:0.04em;text-transform:uppercase;">Premium School Uniforms</p>
+            <td style="background:linear-gradient(135deg,#1a6bb8 0%,#004C99 60%,#003580 100%);padding:22px 20px;text-align:center;">
+              <h1 style="margin:0;color:#ffffff;font-size:22px;font-weight:800;letter-spacing:-0.5px;">The Uniform Lab</h1>
+              <p style="margin:5px 0 0;color:rgba(255,255,255,0.7);font-size:11px;letter-spacing:0.04em;text-transform:uppercase;">Premium School Uniforms</p>
             </td>
           </tr>
           <!-- BODY -->
           ${bodyHtml}
           <!-- FOOTER -->
           <tr>
-            <td style="background:#f8fafc;border-top:1px solid #e2e8f0;padding:20px 40px;text-align:center;">
-              <p style="margin:0 0 6px;color:#94a3b8;font-size:11px;">
+            <td style="background:#f8fafc;border-top:1px solid #e2e8f0;padding:16px 20px;text-align:center;">
+              <p style="margin:0 0 5px;color:#94a3b8;font-size:11px;">
                 © ${new Date().getFullYear()} The Uniform Lab &nbsp;·&nbsp;
                 <a href="${FRONTEND_URL}" style="color:#2563eb;text-decoration:none;">uniformlab.in</a>
               </p>
               <p style="margin:0;color:#cbd5e1;font-size:10px;">
                 Need help? WhatsApp us at
-                <a href="https://wa.me/917977677790" style="color:#2563eb;text-decoration:none;">+91 79776 77790</a>
+              <a href="https://wa.me/919028552855" style="color:#2563eb;text-decoration:none;">+91 90285 52855</a>
               </p>
             </td>
           </tr>
@@ -95,29 +95,23 @@ async function sendPasswordResetEmail(toEmail, resetToken) {
 
   const bodyHtml = `
   <tr>
-    <td style="padding:36px 40px 24px;">
-      <h2 style="margin:0 0 10px;color:#1a1a2e;font-size:22px;font-weight:700;">Reset your password</h2>
-      <p style="margin:0 0 24px;color:#475569;font-size:14px;line-height:1.7;">
+    <td style="padding:24px 20px 16px;">
+      <h2 style="margin:0 0 10px;color:#1a1a2e;font-size:20px;font-weight:700;">Reset your password</h2>
+      <p style="margin:0 0 20px;color:#475569;font-size:14px;line-height:1.7;">
         We received a request to reset the password for your Uniform Lab account. Click the button below to set a new password.
         This link is valid for <strong>1 hour</strong>.
       </p>
-      <table cellpadding="0" cellspacing="0" style="margin:0 0 28px;">
-        <tr>
-          <td style="border-radius:9999px;background:linear-gradient(180deg,#1a6bb8 0%,#004C99 100%);box-shadow:0 4px 14px rgba(0,76,153,0.35);">
-            <a href="${resetLink}"
-               style="display:inline-block;padding:14px 40px;color:#ffffff;font-size:15px;font-weight:700;text-decoration:none;border-radius:9999px;letter-spacing:0.02em;">
-              Reset Password →
-            </a>
-          </td>
-        </tr>
-      </table>
-      <p style="margin:0 0 6px;color:#94a3b8;font-size:11px;">Or copy this link into your browser:</p>
+      <a href="${resetLink}"
+         style="display:block;width:100%;text-align:center;padding:14px 20px;background:linear-gradient(180deg,#1a6bb8 0%,#004C99 100%);color:#ffffff;font-size:15px;font-weight:700;text-decoration:none;border-radius:9999px;box-sizing:border-box;letter-spacing:0.02em;box-shadow:0 4px 14px rgba(0,76,153,0.35);">
+        Reset Password →
+      </a>
+      <p style="margin:16px 0 6px;color:#94a3b8;font-size:11px;">Or copy this link into your browser:</p>
       <p style="margin:0;background:#f1f5f9;border-radius:8px;padding:10px 12px;color:#2563eb;font-size:11px;word-break:break-all;">${resetLink}</p>
     </td>
   </tr>
   <tr>
-    <td style="padding:0 40px 32px;">
-      <div style="background:#fef3c7;border:1px solid #fde68a;border-radius:12px;padding:14px 18px;">
+    <td style="padding:0 20px 24px;">
+      <div style="background:#fef3c7;border:1px solid #fde68a;border-radius:12px;padding:12px 16px;">
         <p style="margin:0;color:#92400e;font-size:12px;line-height:1.6;">
           🔒 <strong>Didn't request this?</strong> Simply ignore this email — your password won't change and this link will expire automatically.
         </p>
@@ -241,25 +235,25 @@ async function sendOrderStatusEmail(toEmail, customerName, order, newStatus) {
     : '';
 
   const ordersLink = `${FRONTEND_URL}/account?tab=orders`;
-  const whatsappLink = 'https://wa.me/917977677790';
+  const whatsappLink = 'https://wa.me/919028552855';
 
   const bodyHtml = `
   <tr>
-    <td style="padding:32px 40px 0;">
+    <td style="padding:24px 20px 0;">
       <!-- Status badge -->
-      <div style="display:inline-block;background:${cfg.bgColor};border:1px solid ${cfg.borderColor};border-radius:9999px;padding:6px 16px;margin-bottom:20px;">
+      <div style="display:inline-block;background:${cfg.bgColor};border:1px solid ${cfg.borderColor};border-radius:9999px;padding:5px 14px;margin-bottom:16px;">
         <span style="color:${cfg.color};font-size:12px;font-weight:700;letter-spacing:0.04em;text-transform:uppercase;">${cfg.emoji} ${cfg.statusLabel}</span>
       </div>
-      <h2 style="margin:0 0 10px;color:#1a1a2e;font-size:21px;font-weight:700;">${cfg.heading}</h2>
-      <p style="margin:0 0 6px;color:#64748b;font-size:13px;">Hi <strong>${customerName || 'there'}</strong>,</p>
-      <p style="margin:0 0 24px;color:#475569;font-size:14px;line-height:1.7;">${cfg.message}</p>
+      <h2 style="margin:0 0 8px;color:#1a1a2e;font-size:20px;font-weight:700;">${cfg.heading}</h2>
+      <p style="margin:0 0 4px;color:#64748b;font-size:13px;">Hi <strong>${customerName || 'there'}</strong>,</p>
+      <p style="margin:0 0 20px;color:#475569;font-size:14px;line-height:1.7;">${cfg.message}</p>
     </td>
   </tr>
   <tr>
-    <td style="padding:0 40px 20px;">
+    <td style="padding:0 20px 16px;">
       <!-- Order summary card -->
-      <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:14px;overflow:hidden;">
-        <div style="background:#f1f5f9;padding:12px 20px;border-bottom:1px solid #e2e8f0;">
+      <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:12px;overflow:hidden;">
+        <div style="background:#f1f5f9;padding:10px 16px;border-bottom:1px solid #e2e8f0;">
           <table width="100%" cellpadding="0" cellspacing="0">
             <tr>
               <td style="color:#1e293b;font-size:13px;font-weight:700;">Order #${orderId}</td>
@@ -267,13 +261,13 @@ async function sendOrderStatusEmail(toEmail, customerName, order, newStatus) {
             </tr>
           </table>
         </div>
-        <div style="padding:4px 20px 8px;">
+        <div style="padding:4px 16px 8px;">
           <table width="100%" cellpadding="0" cellspacing="0">
             ${itemRowsHtml || `<tr><td style="padding:16px 0;color:#94a3b8;font-size:13px;">No item details available.</td></tr>`}
           </table>
         </div>
         ${totalAmount ? `
-        <div style="border-top:2px solid #e2e8f0;padding:12px 20px;">
+        <div style="border-top:2px solid #e2e8f0;padding:10px 16px;">
           <table width="100%" cellpadding="0" cellspacing="0">
             <tr>
               <td style="color:#1e293b;font-size:14px;font-weight:700;">Total</td>
@@ -285,24 +279,16 @@ async function sendOrderStatusEmail(toEmail, customerName, order, newStatus) {
     </td>
   </tr>
   <tr>
-    <td style="padding:0 40px 32px;">
-      <table cellpadding="0" cellspacing="0">
-        <tr>
-          <td style="border-radius:9999px;background:linear-gradient(180deg,#1a6bb8 0%,#004C99 100%);box-shadow:0 4px 14px rgba(0,76,153,0.3);">
-            <a href="${ordersLink}"
-               style="display:inline-block;padding:13px 32px;color:#ffffff;font-size:14px;font-weight:700;text-decoration:none;border-radius:9999px;">
-              View My Orders →
-            </a>
-          </td>
-          <td style="width:12px;"></td>
-          <td style="border-radius:9999px;background:#f0fdf4;border:1.5px solid #86efac;">
-            <a href="${whatsappLink}"
-               style="display:inline-block;padding:12px 24px;color:#15803d;font-size:14px;font-weight:700;text-decoration:none;border-radius:9999px;">
-              💬 WhatsApp Us
-            </a>
-          </td>
-        </tr>
-      </table>
+    <td style="padding:0 20px 24px;">
+      <!-- Buttons stacked vertically — works on all screen sizes -->
+      <a href="${ordersLink}"
+         style="display:block;width:100%;text-align:center;padding:13px 20px;background:linear-gradient(180deg,#1a6bb8 0%,#004C99 100%);color:#ffffff;font-size:14px;font-weight:700;text-decoration:none;border-radius:9999px;box-sizing:border-box;box-shadow:0 4px 14px rgba(0,76,153,0.3);">
+        View My Orders →
+      </a>
+      <a href="${whatsappLink}"
+         style="display:block;width:100%;text-align:center;padding:12px 20px;margin-top:10px;background:#f0fdf4;border:1.5px solid #86efac;color:#15803d;font-size:14px;font-weight:700;text-decoration:none;border-radius:9999px;box-sizing:border-box;">
+        💬 WhatsApp Us
+      </a>
     </td>
   </tr>`;
 
