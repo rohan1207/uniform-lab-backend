@@ -59,8 +59,10 @@ adminRouter.get('/:id', async (req, res) => {
 function buildProductFromBody(body) {
   const {
     schoolId,
-    categoryId,
+    categoryId,    // legacy single-category field (still accepted)
+    categoryIds,   // new: array of category ObjectIds
     gradeId,
+    gradeLabel,    // new: string class name from school.classes
     name,
     slug,
     description,
@@ -79,10 +81,17 @@ function buildProductFromBody(body) {
     variants,
   } = body;
 
+  // Resolve categories: prefer categoryIds array, fall back to single categoryId
+  const resolvedCategoryIds = Array.isArray(categoryIds) && categoryIds.length
+    ? categoryIds
+    : (categoryId ? [categoryId] : []);
+
   const base = {
     school: schoolId,
-    category: categoryId,
+    category: resolvedCategoryIds[0] || categoryId, // primary category (backward compat)
+    categories: resolvedCategoryIds,                // all selected categories
     grade: gradeId || undefined,
+    gradeLabel: gradeLabel || undefined,            // string class label from school.classes
     name,
     description,
     gender,
@@ -150,10 +159,11 @@ function buildProductFromBody(body) {
 
 // POST /api/admin/products
 adminRouter.post('/', async (req, res) => {
-  const { schoolId, categoryId, name } = req.body || {};
+  const { schoolId, categoryId, categoryIds, name } = req.body || {};
+  const hasCat = (Array.isArray(categoryIds) && categoryIds.length) || categoryId;
 
-  if (!schoolId || !categoryId || !name) {
-    return res.status(400).json({ error: { message: 'schoolId, categoryId, name are required' } });
+  if (!schoolId || !hasCat || !name) {
+    return res.status(400).json({ error: { message: 'schoolId, categoryId (or categoryIds), name are required' } });
   }
 
   const doc = buildProductFromBody(req.body);
@@ -169,36 +179,60 @@ adminRouter.post('/', async (req, res) => {
 
 // PATCH /api/admin/products/:id
 adminRouter.patch('/:id', async (req, res) => {
-  const update = { ...buildProductFromBody(req.body) };
-  delete update._id;
-  if (update.schoolId) {
-    update.school = update.schoolId;
-    delete update.schoolId;
+  try {
+    const update = { ...buildProductFromBody(req.body) };
+    delete update._id;
+
+    // Always resolve categories from the request body explicitly
+    const incomingCatIds = Array.isArray(req.body.categoryIds) && req.body.categoryIds.length
+      ? req.body.categoryIds
+      : (req.body.categoryId ? [req.body.categoryId] : null);
+
+    if (incomingCatIds && incomingCatIds.length) {
+      update.category = incomingCatIds[0];     // primary category (backward compat)
+      update.categories = incomingCatIds;      // full multi-category array
+    }
+
+    // gradeLabel from body (string class label); clear gradeId legacy field if not provided
+    if (req.body.gradeLabel !== undefined) {
+      update.gradeLabel = req.body.gradeLabel || null;
+    }
+    if (req.body.gradeId !== undefined) {
+      update.grade = req.body.gradeId || null;
+    } else {
+      // don't accidentally null the existing grade ObjectId ref when not provided
+      delete update.grade;
+    }
+
+    if (update.name && !update.slug) {
+      update.slug = update.name
+        .toLowerCase()
+        .trim()
+        .replace(/[^a-z0-9\s-]/g, '')
+        .replace(/\s+/g, '-')
+        .replace(/-+/g, '-');
+    }
+
+    // Use explicit $set with undefined values stripped — avoids Mongoose version-dependent
+    // auto-wrapping behavior and ensures `categories` array is always persisted
+    const setDoc = {};
+    Object.keys(update).forEach((k) => {
+      if (update[k] !== undefined) setDoc[k] = update[k];
+    });
+
+    const product = await Product.findByIdAndUpdate(
+      req.params.id,
+      { $set: setDoc },
+      { new: true, runValidators: true }
+    );
+    if (!product) {
+      return res.status(404).json({ error: { message: 'Product not found' } });
+    }
+    res.json(product);
+  } catch (err) {
+    console.error('PATCH /products/:id error:', err);
+    return res.status(500).json({ error: { message: err.message || 'Failed to update product' } });
   }
-  if (update.categoryId) {
-    update.category = update.categoryId;
-    delete update.categoryId;
-  }
-  if (update.gradeId !== undefined) {
-    update.grade = update.gradeId || null;
-    delete update.gradeId;
-  }
-  if (update.name && !update.slug) {
-    update.slug = update.name
-      .toLowerCase()
-      .trim()
-      .replace(/[^a-z0-9\s-]/g, '')
-      .replace(/\s+/g, '-')
-      .replace(/-+/g, '-');
-  }
-  const product = await Product.findByIdAndUpdate(req.params.id, update, {
-    new: true,
-    runValidators: true,
-  });
-  if (!product) {
-    return res.status(404).json({ error: { message: 'Product not found' } });
-  }
-  res.json(product);
 });
 
 // DELETE /api/admin/products/:id – remove from Mongo and delete images from Cloudinary

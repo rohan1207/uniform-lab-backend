@@ -32,7 +32,11 @@ const productSchema = new mongoose.Schema(
   {
     school: { type: mongoose.Schema.Types.ObjectId, ref: 'School', required: true },
     category: { type: mongoose.Schema.Types.ObjectId, ref: 'Category', required: true },
+    // Multi-category support: all selected categories (first one mirrors `category` for compat)
+    categories: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Category' }],
     grade: { type: mongoose.Schema.Types.ObjectId, ref: 'Grade' },
+    // String-based grade/class label sourced directly from school.classes (e.g. "Class 5", "KG")
+    gradeLabel: { type: String },
     name: { type: String, required: true },
     slug: { type: String },
     description: { type: String },

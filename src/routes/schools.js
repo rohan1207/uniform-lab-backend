@@ -21,14 +21,31 @@ publicRouter.get('/:slug', async (req, res) => {
   if (!school) {
     return res.status(404).json({ error: { message: 'School not found' } });
   }
-  // Run both queries in parallel instead of sequentially
-  const [categories, products] = await Promise.all([
-    Category.find({ school: school._id }).sort({ sortOrder: 1, name: 1 }).lean(),
-    Product.find({ school: school._id, isActive: true })
-      .populate('grade', '_id name')
-      .populate('category', '_id name slug')
-      .lean(),
-  ]);
+  // Fetch all active products for this school, populating both single and multi-category
+  const products = await Product.find({ school: school._id, isActive: true })
+    .populate('grade', '_id name')
+    .populate('category', '_id name slug sortOrder')
+    .populate('categories', '_id name slug sortOrder')
+    .lean();
+
+  // Build a deduplicated, sorted categories list from the products themselves
+  // (supports both legacy single `category` and new `categories` array)
+  const categoriesMap = new Map();
+  products.forEach((p) => {
+    // Use categories array if populated, otherwise fall back to single category
+    const allCats = (p.categories && p.categories.length > 0)
+      ? p.categories
+      : (p.category ? [p.category] : []);
+    allCats.forEach((cat) => {
+      if (cat && cat._id) {
+        categoriesMap.set(String(cat._id), cat);
+      }
+    });
+  });
+  const categories = Array.from(categoriesMap.values()).sort(
+    (a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0) || a.name.localeCompare(b.name)
+  );
+
   res.json({ school, categories, products });
 });
 
