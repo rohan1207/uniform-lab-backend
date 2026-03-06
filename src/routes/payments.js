@@ -285,7 +285,9 @@ publicRouter.get('/instamojo/redirect', (req, res) => {
   if (String(paymentStatus).toLowerCase() === 'credit') {
     return res.redirect(`${frontendBase}/account?tab=orders&status=success`);
   }
-  return res.redirect(`${frontendBase}/checkout?status=payment_failed`);
+  // Pass reason so frontend can show a specific failure message
+  const reason = String(paymentStatus || '').toLowerCase() === 'failed' ? 'failed' : 'cancelled';
+  return res.redirect(`${frontendBase}/checkout?status=payment_failed&reason=${reason}`);
 });
 
 module.exports = { public: publicRouter };
