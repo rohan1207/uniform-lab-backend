@@ -124,6 +124,7 @@ adminRouter.patch('/:id', async (req, res) => {
     assignedDeliveryPartnerId,
     notes,
     paymentStatus,
+    trackingNumber,
   } = req.body;
 
   const update = {};
@@ -133,6 +134,7 @@ adminRouter.patch('/:id', async (req, res) => {
   if (typeof notes === 'string') update.notes = notes;
   if (paymentStatus) update.paymentStatus = paymentStatus;
   if (assignedDeliveryPartnerId) update.assignedDeliveryPartner = assignedDeliveryPartnerId;
+  if (typeof trackingNumber === 'string') update.trackingNumber = trackingNumber;
 
   // Snapshot previous deliveryStatus BEFORE the update (only when deliveryStatus is changing)
   const previousOrder = deliveryStatus

@@ -61,6 +61,7 @@ const orderSchema = new mongoose.Schema(
       ref: 'DeliveryPartner',
     },
     notes: { type: String },
+    trackingNumber: { type: String },
   },
   { timestamps: true }
 );
