@@ -10,7 +10,10 @@ const publicRouter = express.Router();
 // GET /api/public/schools
 publicRouter.get('/', async (req, res) => {
   res.set('Cache-Control', 'public, max-age=120, stale-while-revalidate=300');
-  const schools = await School.find({ isActive: true }).select('name slug logoUrl imageUrl level').lean();
+  const schools = await School.find({ isActive: true })
+    .sort({ displayOrder: 1, createdAt: -1 })
+    .select('name slug logoUrl imageUrl level displayOrder')
+    .lean();
   res.json(schools);
 });
 
@@ -54,7 +57,7 @@ const adminRouter = express.Router();
 
 // GET /api/admin/schools
 adminRouter.get('/', async (req, res) => {
-  const schools = await School.find().sort({ createdAt: -1 });
+  const schools = await School.find().sort({ displayOrder: 1, createdAt: -1 });
   res.json(schools);
 });
 
@@ -83,6 +86,26 @@ adminRouter.post('/', async (req, res) => {
     tags,
   });
   res.status(201).json(school);
+});
+
+// PATCH /api/admin/schools/:id/order – lightweight: only updates displayOrder
+adminRouter.patch('/:id/order', async (req, res) => {
+  try {
+    const raw = req.body.displayOrder;
+    const displayOrder = raw === null || raw === undefined || raw === '' ? null : Number(raw);
+    if (displayOrder !== null && (!Number.isFinite(displayOrder) || displayOrder < 1)) {
+      return res.status(400).json({ error: { message: 'displayOrder must be a positive integer or null' } });
+    }
+    const school = await School.findByIdAndUpdate(
+      req.params.id,
+      { $set: { displayOrder } },
+      { new: true }
+    );
+    if (!school) return res.status(404).json({ error: { message: 'School not found' } });
+    res.json({ _id: school._id, displayOrder: school.displayOrder });
+  } catch (err) {
+    res.status(500).json({ error: { message: err.message } });
+  }
 });
 
 // PATCH /api/admin/schools/:id

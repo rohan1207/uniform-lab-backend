@@ -13,6 +13,7 @@ const schoolSchema = new mongoose.Schema(
     accentColor: { type: String },
     isActive: { type: Boolean, default: true },
     tags: [{ type: String }],
+    displayOrder: { type: Number, default: null }, // manual sort order, set from admin panel
   },
   { timestamps: true }
 );
