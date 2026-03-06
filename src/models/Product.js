@@ -80,6 +80,7 @@ const productSchema = new mongoose.Schema(
     variants: [variantSchema],
 
     tags: [{ type: String }],
+    displayOrder: { type: Number, default: null }, // manual sort order per school, set from admin panel
     isActive: { type: Boolean, default: true },
   },
   { timestamps: true }

@@ -177,6 +177,27 @@ adminRouter.post('/', async (req, res) => {
   res.status(201).json(product);
 });
 
+// PATCH /api/admin/products/:id/order – lightweight: only updates displayOrder
+adminRouter.patch('/:id/order', async (req, res) => {
+  try {
+    const raw = req.body.displayOrder;
+    const displayOrder = raw === null || raw === undefined || raw === '' ? null : Number(raw);
+    if (displayOrder !== null && (!Number.isFinite(displayOrder) || displayOrder < 1)) {
+      return res.status(400).json({ error: { message: 'displayOrder must be a positive integer or null' } });
+    }
+    const product = await Product.findByIdAndUpdate(
+      req.params.id,
+      { $set: { displayOrder } },
+      { new: true }
+    );
+    if (!product) return res.status(404).json({ error: { message: 'Product not found' } });
+    res.json({ _id: product._id, displayOrder: product.displayOrder });
+  } catch (err) {
+    console.error('PATCH /products/:id/order error:', err);
+    res.status(500).json({ error: { message: err.message || 'Failed to update order' } });
+  }
+});
+
 // PATCH /api/admin/products/:id
 adminRouter.patch('/:id', async (req, res) => {
   try {
