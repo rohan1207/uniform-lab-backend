@@ -54,7 +54,8 @@ const orderSchema = new mongoose.Schema(
       default: 'Order confirmed',
     },
     deliveryReason: { type: String },
-    deliveryMethod: { type: String, default: 'Free delivery' },
+    deliveryCharge: { type: Number, default: 125 },
+    deliveryMethod: { type: String, default: '₹125 delivery' },
     assignedDeliveryPartner: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'DeliveryPartner',

@@ -119,7 +119,9 @@ publicRouter.post('/instamojo/checkout', async (req, res) => {
     customerPhone,
     address,
     items,
-    totalAmount,
+    totalAmount,      // grand total sent from frontend (items + delivery)
+    itemsTotal,       // items-only subtotal (optional, informational)
+    deliveryCharge,   // should always be 125
   } = req.body || {};
 
   if (!customerName || !address || !Array.isArray(items) || !items.length || !totalAmount) {
@@ -132,7 +134,10 @@ publicRouter.post('/instamojo/checkout', async (req, res) => {
     return res.status(400).json({ error: { message: 'Invalid total amount' } });
   }
 
-  const normAmount = Number(totalAmount);
+  // Always enforce ₹125 delivery charge server-side — never trust client for this
+  const DELIVERY_CHARGE = 125;
+  const normItemsTotal = Number.isFinite(Number(itemsTotal)) ? Number(itemsTotal) : Number(totalAmount) - DELIVERY_CHARGE;
+  const normAmount = normItemsTotal + DELIVERY_CHARGE;
 
   const firstItem = items[0] || {};
   const baseName = firstItem.productName || firstItem.name || 'Uniform Lab order';
@@ -140,7 +145,7 @@ publicRouter.post('/instamojo/checkout', async (req, res) => {
   if (firstItem.size) {
     purpose += ` (Size ${firstItem.size})`;
   }
-  purpose = `${purpose} – Uniform Lab`;
+  purpose = `${purpose} – Uniform Lab (+₹125 delivery)`;
   if (purpose.length > 90) purpose = purpose.slice(0, 90);
 
   const paymentRequest = await createPaymentRequest(req, {
@@ -253,6 +258,8 @@ publicRouter.post('/instamojo/webhook', async (req, res) => {
         imageUrl: i.imageUrl,
       })),
       totalAmount: session.totalAmount,
+      deliveryCharge: 125,
+      deliveryMethod: '₹125 delivery',
       paymentMethod: 'Online',
       paymentStatus: 'Paid',
       gatewayPaymentId: paymentId,
