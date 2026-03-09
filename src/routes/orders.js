@@ -4,6 +4,7 @@ const DeliveryPartner = require('../models/DeliveryPartner');
 const Product = require('../models/Product');
 const generateUniqueOrderId = require('../utils/orderId');
 const { sendOrderStatusEmail } = require('../utils/emailService');
+const { emitUnfulfilledCount } = require('../socket');
 
 const publicRouter = express.Router();
 const adminRouter = express.Router();
@@ -57,6 +58,7 @@ publicRouter.post('/', async (req, res) => {
     assignedDeliveryPartner: defaultPartner ? defaultPartner._id : undefined,
   });
 
+  emitUnfulfilledCount().catch(() => {});
   res.status(201).json(order);
 });
 
@@ -173,6 +175,9 @@ adminRouter.patch('/:id', async (req, res) => {
   }
   // ─────────────────────────────────────────────────────────────────────────────
 
+  if (fulfillmentStatus === 'Fulfilled') {
+    emitUnfulfilledCount().catch(() => {});
+  }
   res.json(order);
 });
 

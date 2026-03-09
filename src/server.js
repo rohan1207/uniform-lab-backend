@@ -6,6 +6,7 @@ dotenv.config();
 const http = require('http');
 const app = require('./app');
 const connectDB = require('./config/db');
+const { attachSocketServer } = require('./socket');
 
 const PORT = process.env.PORT || 5000;
 const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://localhost:27017/uniformlab';
@@ -14,6 +15,7 @@ async function start() {
   await connectDB(MONGODB_URI);
 
   const server = http.createServer(app);
+  attachSocketServer(server);
 
   server.listen(PORT, () => {
     // eslint-disable-next-line no-console
