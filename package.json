@@ -8,7 +8,8 @@
     "start": "node src/server.js",
     "seed": "node scripts/seedAdmin.js",
     "seed:admin": "node scripts/seedAdmin.js",
-    "seed:categories": "node scripts/seedBvrtseCategories.js"
+    "seed:categories": "node scripts/seedBvrtseCategories.js",
+    "email:test-order": "node scripts/sendOrderTestEmail.js"
   },
   "keywords": [
     "uniforms",

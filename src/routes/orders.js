@@ -58,6 +58,18 @@ publicRouter.post('/', async (req, res) => {
     assignedDeliveryPartner: defaultPartner ? defaultPartner._id : undefined,
   });
 
+  // Fire initial "order placed / confirmed" email in the background (non-blocking)
+  if (customerEmail) {
+    const custName = customerName || 'Customer';
+    sendOrderStatusEmail(customerEmail, custName, order, 'confirmed').catch((err) => {
+      // eslint-disable-next-line no-console
+      console.error(
+        `[OrderEmail] Failed initial confirmation for order ${order.uniqueOrderId || order._id}:`,
+        err.message
+      );
+    });
+  }
+
   emitUnfulfilledCount().catch(() => {});
   res.status(201).json(order);
 });
