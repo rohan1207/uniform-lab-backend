@@ -241,7 +241,7 @@ publicRouter.post('/instamojo/webhook', async (req, res) => {
     }
 
     // Create paid order
-    await Order.create({
+    const order = await Order.create({
       uniqueOrderId: require('../utils/orderId')(),
       school: schoolId,
       customerName: session.customerName,
@@ -266,6 +266,19 @@ publicRouter.post('/instamojo/webhook', async (req, res) => {
       gatewayPaymentRequestId: paymentRequestId,
       gatewayRawWebhook: payload,
     });
+
+    // Fire initial "order confirmed" email as soon as the payment is credited.
+    if (session.customerEmail) {
+      const { sendOrderStatusEmail } = require('../utils/emailService');
+      const custName = session.customerName || 'Customer';
+      sendOrderStatusEmail(session.customerEmail, custName, order, 'confirmed').catch((err) => {
+        // eslint-disable-next-line no-console
+        console.error(
+          `[OrderEmail] Failed initial confirmation (Instamojo webhook) for order ${order.uniqueOrderId || order._id}:`,
+          err.message
+        );
+      });
+    }
 
     session.status = 'Completed';
     await session.save();
