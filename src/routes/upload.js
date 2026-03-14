@@ -2,6 +2,7 @@ const express = require('express');
 const multer = require('multer');
 const { Readable } = require('stream');
 const { cloudinary, isConfigured } = require('../config/cloudinary');
+const { isR2Configured, uploadToR2, deleteFromR2 } = require('../config/r2');
 const School = require('../models/School');
 
 const router = express.Router();
@@ -43,17 +44,34 @@ async function resolveSchoolSlug(req) {
   return normalizeSegment(body.schoolSlug, 'school');
 }
 
-// POST /api/admin/upload/school-logo – upload logo to Cloudinary folder schools/{schoolSlug}/logo
+const useR2 = process.env.USE_R2 === 'true';
+
+function buildR2Key(parts) {
+  return parts.filter(Boolean).join('/');
+}
+
+// POST /api/admin/upload/school-logo – upload logo to folder schools/{schoolSlug}/logo
 router.post('/school-logo', uploadMiddleware, async (req, res) => {
-  if (!isConfigured()) {
-    return res.status(503).json({ error: { message: 'Cloudinary is not configured' } });
-  }
   if (!req.file) {
     return res.status(400).json({ error: { message: 'No file uploaded' } });
   }
   const schoolSlug = await resolveSchoolSlug(req);
   const folder = `schools/${schoolSlug}/logo`;
 
+  if (useR2 && isR2Configured()) {
+    try {
+      const key = buildR2Key([folder, `${Date.now()}-${req.file.originalname}`]);
+      const { url, key: storedKey } = await uploadToR2(key, req.file.buffer, req.file.mimetype);
+      return res.status(201).json({ url, publicId: storedKey });
+    } catch (err) {
+      return res.status(500).json({ error: { message: err.message || 'Failed to upload to Cloudflare' } });
+    }
+  }
+
+  if (!isConfigured()) {
+    return res.status(503).json({ error: { message: 'Cloudinary is not configured' } });
+  }
+
   return new Promise((resolve, reject) => {
     const uploadStream = cloudinary.uploader.upload_stream(
       { folder, resource_type: 'image' },
@@ -68,17 +86,28 @@ router.post('/school-logo', uploadMiddleware, async (req, res) => {
   });
 });
 
-// POST /api/admin/upload/school-image – upload school main image to Cloudinary folder schools/{schoolSlug}/image
+// POST /api/admin/upload/school-image – upload school main image to folder schools/{schoolSlug}/image
 router.post('/school-image', uploadMiddleware, async (req, res) => {
-  if (!isConfigured()) {
-    return res.status(503).json({ error: { message: 'Cloudinary is not configured' } });
-  }
   if (!req.file) {
     return res.status(400).json({ error: { message: 'No file uploaded' } });
   }
   const schoolSlug = await resolveSchoolSlug(req);
   const folder = `schools/${schoolSlug}/image`;
 
+  if (useR2 && isR2Configured()) {
+    try {
+      const key = buildR2Key([folder, `${Date.now()}-${req.file.originalname}`]);
+      const { url, key: storedKey } = await uploadToR2(key, req.file.buffer, req.file.mimetype);
+      return res.status(201).json({ url, publicId: storedKey });
+    } catch (err) {
+      return res.status(500).json({ error: { message: err.message || 'Failed to upload to Cloudflare' } });
+    }
+  }
+
+  if (!isConfigured()) {
+    return res.status(503).json({ error: { message: 'Cloudinary is not configured' } });
+  }
+
   return new Promise((resolve, reject) => {
     const uploadStream = cloudinary.uploader.upload_stream(
       { folder, resource_type: 'image' },
@@ -93,11 +122,8 @@ router.post('/school-image', uploadMiddleware, async (req, res) => {
   });
 });
 
-// POST /api/admin/upload/product-image – upload product main image to Cloudinary folder products/{schoolSlug}/{categorySlug}
+// POST /api/admin/upload/product-image – upload product main image to folder products/{schoolSlug}/{categorySlug}
 router.post('/product-image', uploadMiddleware, async (req, res) => {
-  if (!isConfigured()) {
-    return res.status(503).json({ error: { message: 'Cloudinary is not configured' } });
-  }
   if (!req.file) {
     return res.status(400).json({ error: { message: 'No file uploaded' } });
   }
@@ -119,6 +145,21 @@ router.post('/product-image', uploadMiddleware, async (req, res) => {
 
   const folder = `products/${schoolSlug}/${categorySlug}`;
 
+  if (useR2 && isR2Configured()) {
+    try {
+      const baseName = publicId || `${productSlug}-${Date.now()}`;
+      const key = buildR2Key([folder, `${baseName}${colorSlug ? `-${colorSlug}-${imageIndex}` : ''}`]);
+      const { url, key: storedKey } = await uploadToR2(key, req.file.buffer, req.file.mimetype);
+      return res.status(201).json({ url, publicId: storedKey });
+    } catch (err) {
+      return res.status(500).json({ error: { message: err.message || 'Failed to upload to Cloudflare' } });
+    }
+  }
+
+  if (!isConfigured()) {
+    return res.status(503).json({ error: { message: 'Cloudinary is not configured' } });
+  }
+
   return new Promise((resolve, reject) => {
     const uploadStream = cloudinary.uploader.upload_stream(
       {
@@ -137,17 +178,27 @@ router.post('/product-image', uploadMiddleware, async (req, res) => {
   });
 });
 
-// DELETE /api/admin/upload/asset – delete asset from Cloudinary by public_id
+// DELETE /api/admin/upload/asset – delete asset by public_id/key from Cloudinary and/or R2
 router.delete('/asset', express.json(), async (req, res) => {
-  if (!isConfigured()) {
-    return res.status(503).json({ error: { message: 'Cloudinary is not configured' } });
-  }
   const { publicId } = req.body || {};
   if (!publicId || typeof publicId !== 'string') {
     return res.status(400).json({ error: { message: 'publicId is required' } });
   }
-  const result = await cloudinary.uploader.destroy(publicId, { resource_type: 'image' });
-  res.json({ ok: true, result });
+  let cloudinaryResult = null;
+
+  if (isConfigured()) {
+    try {
+      cloudinaryResult = await cloudinary.uploader.destroy(publicId, { resource_type: 'image' });
+    } catch {
+      // ignore
+    }
+  }
+
+  if (useR2 && isR2Configured()) {
+    await deleteFromR2(publicId);
+  }
+
+  res.json({ ok: true, result: cloudinaryResult });
 });
 
 module.exports = router;
