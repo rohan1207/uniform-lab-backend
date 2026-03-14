@@ -13,6 +13,11 @@ const { Resend } = require('resend');
 
 const FROM_EMAIL = process.env.FROM_EMAIL || 'Uniform Lab <orders@uniformlab.in>';
 const FRONTEND_URL = (process.env.FRONTEND_URL || 'https://uniformlab.in').replace(/\/$/, '');
+const OWNER_ORDER_EMAIL = process.env.OWNER_ORDER_EMAIL || 'nivi12@gmail.com';
+const ADMIN_BASE_URL =
+  (process.env.ADMIN_BASE_URL || 'https://uniformlab-admin.onrender.com').replace(/\/+$/, '') ||
+  'https://uniformlab-admin.onrender.com';
+const ADMIN_ORDERS_URL = `${ADMIN_BASE_URL}/orders`;
 
 // Lazy-init Resend so missing key only warns at call time, not import time
 let _resend = null;
@@ -211,7 +216,7 @@ async function sendOrderStatusEmail(toEmail, customerName, order, newStatus) {
     ? new Date(order.createdAt).toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' })
     : '';
 
-  // ── Build items rows ──
+  // ── Build items rows (with optional image) ──
   const items = Array.isArray(order.items) ? order.items : [];
   const itemRowsHtml = items.map((item) => {
     const name = item.productName || item.name || 'Item';
@@ -220,8 +225,13 @@ async function sendOrderStatusEmail(toEmail, customerName, order, newStatus) {
     const color = item.color ? `<span style="color:#64748b;"> · ${item.color}</span>` : '';
     const price = item.price != null ? `₹${Number(item.price).toLocaleString('en-IN')}` : '';
     const lineTotal = item.price != null ? `₹${(Number(item.price) * qty).toLocaleString('en-IN')}` : '';
+    const imgUrl = (item.imageUrl || '').replace(/&/g, '&amp;');
+    const imgCell = imgUrl
+      ? `<td style="padding:10px 12px 10px 0;border-bottom:1px solid #f1f5f9;vertical-align:middle;width:56px;"><img src="${imgUrl}" alt="" width="56" height="56" style="display:block;width:56px;height:56px;object-fit:cover;border-radius:8px;border:1px solid #e2e8f0;" /></td>`
+      : `<td style="padding:10px 12px 10px 0;border-bottom:1px solid #f1f5f9;vertical-align:middle;width:56px;"></td>`;
     return `
       <tr>
+        ${imgCell}
         <td style="padding:10px 0;border-bottom:1px solid #f1f5f9;color:#1e293b;font-size:13px;line-height:1.5;">
           <strong>${name}</strong>${size}${color}
           <br /><span style="color:#94a3b8;font-size:11px;">Qty: ${qty}${price ? ` · ${price} each` : ''}</span>
@@ -263,7 +273,7 @@ async function sendOrderStatusEmail(toEmail, customerName, order, newStatus) {
         </div>
         <div style="padding:4px 16px 8px;">
           <table width="100%" cellpadding="0" cellspacing="0">
-            ${itemRowsHtml || `<tr><td style="padding:16px 0;color:#94a3b8;font-size:13px;">No item details available.</td></tr>`}
+            ${itemRowsHtml || `<tr><td colspan="3" style="padding:16px 0;color:#94a3b8;font-size:13px;">No item details available.</td></tr>`}
           </table>
         </div>
         ${totalAmount ? `
@@ -306,4 +316,407 @@ async function sendOrderStatusEmail(toEmail, customerName, order, newStatus) {
   }
 }
 
-module.exports = { sendPasswordResetEmail, sendOrderStatusEmail };
+/* ─────────────────────────────────────────────────────────── */
+/* 3. OWNER NEW ORDER EMAIL                                      */
+/* ─────────────────────────────────────────────────────────── */
+
+/**
+ * Sends a minimal, premium-looking summary email to the store owner
+ * whenever a new order is placed.
+ * Includes: customer, shipping address, items with quantities/rates,
+ * delivery charge, and grand total.
+ *
+ * @param {object} order – Mongoose order document (or plain object)
+ */
+async function sendOwnerNewOrderEmail(order) {
+  const resend = getResend();
+
+  if (!resend) {
+    console.warn('[emailService] RESEND_API_KEY not set – skipping owner new-order email.');
+    return;
+  }
+
+  if (!OWNER_ORDER_EMAIL) {
+    console.warn('[emailService] OWNER_ORDER_EMAIL not configured – skipping owner new-order email.');
+    return;
+  }
+
+  if (!order) {
+    return;
+  }
+
+  const orderId = order.uniqueOrderId || String(order._id || '').slice(-8).toUpperCase() || 'N/A';
+  const orderDate = order.createdAt
+    ? new Date(order.createdAt).toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' })
+    : '';
+
+  const schoolName =
+    (order.school && typeof order.school === 'object' && order.school.name && order.school.name) ||
+    order.schoolName ||
+    '—';
+
+  const customerName = order.customerName || 'Customer';
+  const customerEmail = order.customerEmail || '—';
+  const customerPhone = order.customerPhone || '—';
+
+  const addr = order.address || {};
+  const addressName = addr.name || customerName;
+  const line1 = addr.line1 || '';
+  const line2 = addr.line2 || '';
+  const city = addr.city || '';
+  const state = addr.state || '';
+  const pincode = addr.pincode || '';
+  const phone = addr.phone || customerPhone || '—';
+
+  const addressLines = [line1, line2, city && `${city}`, state && `${state}`, pincode && `${pincode}`]
+    .filter(Boolean)
+    .join(', ');
+
+  const paymentMethod = order.paymentMethod || 'Unknown';
+  const paymentStatus = order.paymentStatus || 'Pending';
+  const gatewayPaymentId = order.gatewayPaymentId || '';
+  const gatewayPaymentRequestId = order.gatewayPaymentRequestId || '';
+
+  const items = Array.isArray(order.items) ? order.items : [];
+  const itemsRowsHtml = items
+    .map((item) => {
+      const name = item.productName || item.name || 'Item';
+      const size = item.size ? ` · Size ${item.size}` : '';
+      const color = item.color ? ` · ${item.color}` : '';
+      const qty = Number(item.quantity || 1);
+      const price = Number(item.price || 0);
+      const lineTotal = price * qty;
+      const imgUrl = (item.imageUrl || '').replace(/&/g, '&amp;');
+      const imgCell = imgUrl
+        ? `<td style="padding:8px 10px 8px 0;border-bottom:1px solid #f1f5f9;vertical-align:middle;width:52px;"><img src="${imgUrl}" alt="" width="52" height="52" style="display:block;width:52px;height:52px;object-fit:cover;border-radius:8px;border:1px solid #e2e8f0;" /></td>`
+        : `<td style="padding:8px 10px 8px 0;border-bottom:1px solid #f1f5f9;vertical-align:middle;width:52px;"></td>`;
+      return `
+        <tr>
+          ${imgCell}
+          <td style="padding:8px 0;border-bottom:1px solid #f1f5f9;font-size:13px;color:#1e293b;">
+            <strong>${name}</strong>${size}${color}
+          </td>
+          <td style="padding:8px 0;border-bottom:1px solid #f1f5f9;font-size:13px;color:#64748b;text-align:center;">
+            ${qty}
+          </td>
+          <td style="padding:8px 0;border-bottom:1px solid #f1f5f9;font-size:13px;color:#64748b;text-align:right;">
+            ₹${price.toLocaleString('en-IN')}
+          </td>
+          <td style="padding:8px 0;border-bottom:1px solid #f1f5f9;font-size:13px;color:#0f172a;font-weight:600;text-align:right;">
+            ₹${lineTotal.toLocaleString('en-IN')}
+          </td>
+        </tr>`;
+    })
+    .join('');
+
+  const deliveryCharge =
+    typeof order.deliveryCharge === 'number' && !Number.isNaN(order.deliveryCharge)
+      ? order.deliveryCharge
+      : 125;
+  const itemsSubtotal = items.reduce(
+    (sum, item) => sum + Number(item.price || 0) * Number(item.quantity || 1),
+    0
+  );
+  const totalAmountNumber =
+    typeof order.totalAmount === 'number' && !Number.isNaN(order.totalAmount)
+      ? order.totalAmount
+      : itemsSubtotal + deliveryCharge;
+
+  const subtotalDisplay = `₹${itemsSubtotal.toLocaleString('en-IN')}`;
+  const deliveryDisplay = `₹${deliveryCharge.toLocaleString('en-IN')}`;
+  const totalDisplay = `₹${totalAmountNumber.toLocaleString('en-IN')}`;
+
+  const bodyHtml = `
+  <tr>
+    <td style="padding:22px 20px 8px;">
+      <p style="margin:0 0 6px;font-size:12px;letter-spacing:0.12em;text-transform:uppercase;color:#94a3b8;font-weight:600;">
+        New Order Placed
+      </p>
+      <h2 style="margin:0 0 12px;font-size:19px;color:#0f172a;font-weight:750;">
+        Order #${orderId}
+      </h2>
+      <p style="margin:0 0 16px;font-size:13px;color:#64748b;">
+        A new order has been placed on The Uniform Lab.
+        Open it in the admin panel to review and fulfil.
+      </p>
+    </td>
+  </tr>
+  <tr>
+    <td style="padding:0 20px 8px;">
+      <table width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;border-radius:12px;overflow:hidden;border:1px solid #e2e8f0;">
+        <tr>
+          <td colspan="2" style="background:#f8fafc;padding:10px 14px;border-bottom:1px solid #e2e8f0;font-size:12px;color:#64748b;">
+            <strong style="color:#0f172a;">Order meta</strong>
+            <span style="float:right;color:#94a3b8;">${orderDate}</span>
+          </td>
+        </tr>
+        <tr>
+          <td style="padding:10px 14px;border-right:1px solid #e2e8f0;vertical-align:top;width:50%;font-size:12px;color:#0f172a;">
+            <div style="font-size:11px;letter-spacing:0.08em;text-transform:uppercase;color:#9ca3af;margin-bottom:4px;">Customer</div>
+            <div style="font-size:13px;font-weight:600;margin-bottom:2px;">${customerName}</div>
+            <div style="font-size:12px;color:#64748b;margin-bottom:2px;">${customerEmail}</div>
+            <div style="font-size:12px;color:#64748b;">${customerPhone}</div>
+          </td>
+          <td style="padding:10px 14px;vertical-align:top;width:50%;font-size:12px;color:#0f172a;">
+            <div style="font-size:11px;letter-spacing:0.08em;text-transform:uppercase;color:#9ca3af;margin-bottom:4px;">Ship to</div>
+            <div style="font-size:13px;font-weight:600;margin-bottom:2px;">${addressName}</div>
+            <div style="font-size:12px;color:#64748b;margin-bottom:2px;">${addressLines || '—'}</div>
+            <div style="font-size:12px;color:#64748b;">${phone}</div>
+          </td>
+        </tr>
+        <tr>
+          <td style="padding:10px 14px;border-top:1px solid #e5e7eb;font-size:12px;color:#0f172a;vertical-align:top;">
+            <div style="font-size:11px;letter-spacing:0.08em;text-transform:uppercase;color:#9ca3af;margin-bottom:4px;">School</div>
+            <div style="font-size:13px;font-weight:600;">${schoolName}</div>
+          </td>
+          <td style="padding:10px 14px;border-top:1px solid #e5e7eb;font-size:12px;color:#0f172a;vertical-align:top;">
+            <div style="font-size:11px;letter-spacing:0.08em;text-transform:uppercase;color:#9ca3af;margin-bottom:4px;">Payment</div>
+            <div style="font-size:12px;color:#111827;margin-bottom:2px;">
+              <strong>${paymentMethod}</strong>
+              <span style="color:#9ca3af;"> · ${paymentStatus}</span>
+            </div>
+            ${
+              gatewayPaymentId
+                ? `<div style="font-size:11px;color:#6b7280;">Txn ID: ${gatewayPaymentId}</div>`
+                : gatewayPaymentRequestId
+                ? `<div style="font-size:11px;color:#6b7280;">Request ID: ${gatewayPaymentRequestId}</div>`
+                : ''
+            }
+          </td>
+        </tr>
+      </table>
+    </td>
+  </tr>
+  <tr>
+    <td style="padding:4px 20px 12px;">
+      <table width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;border-radius:12px;overflow:hidden;border:1px solid #e2e8f0;">
+        <tr>
+          <td colspan="5" style="background:#f8fafc;padding:9px 14px;border-bottom:1px solid #e2e8f0;font-size:12px;color:#64748b;">
+            <strong style="color:#0f172a;">Items</strong>
+          </td>
+        </tr>
+        <tr>
+          <th style="padding:6px 10px 6px 0;font-size:11px;color:#9ca3af;font-weight:600;border-bottom:1px solid #e5e7eb;width:52px;"></th>
+          <th align="left" style="padding:6px 14px;font-size:11px;color:#9ca3af;font-weight:600;border-bottom:1px solid #e5e7eb;">Product</th>
+          <th align="center" style="padding:6px 0;font-size:11px;color:#9ca3af;font-weight:600;border-bottom:1px solid #e5e7eb;width:12%;">Qty</th>
+          <th align="right" style="padding:6px 14px;font-size:11px;color:#9ca3af;font-weight:600;border-bottom:1px solid #e5e7eb;width:20%;">Rate</th>
+          <th align="right" style="padding:6px 14px;font-size:11px;color:#9ca3af;font-weight:600;border-bottom:1px solid #e5e7eb;width:22%;">Line total</th>
+        </tr>
+        ${itemsRowsHtml || `
+        <tr>
+          <td colspan="5" style="padding:14px 14px 16px;font-size:12px;color:#9ca3af;text-align:center;">
+            No item details available.
+          </td>
+        </tr>`}
+        <tr>
+          <td colspan="4" style="padding:10px 14px 4px;font-size:12px;color:#64748b;text-align:right;">Items subtotal</td>
+          <td style="padding:10px 14px 4px;font-size:13px;color:#0f172a;font-weight:600;text-align:right;">${subtotalDisplay}</td>
+        </tr>
+        <tr>
+          <td colspan="4" style="padding:4px 14px;font-size:12px;color:#64748b;text-align:right;">Delivery charge</td>
+          <td style="padding:4px 14px;font-size:13px;color:#0f172a;font-weight:600;text-align:right;">${deliveryDisplay}</td>
+        </tr>
+        <tr>
+          <td colspan="4" style="padding:8px 14px 10px;font-size:12px;color:#111827;font-weight:700;text-align:right;border-top:1px solid #e5e7eb;">Grand total</td>
+          <td style="padding:8px 14px 10px;font-size:15px;color:#004C99;font-weight:800;text-align:right;border-top:1px solid #e5e7eb;">${totalDisplay}</td>
+        </tr>
+      </table>
+    </td>
+  </tr>
+  <tr>
+    <td style="padding:0 20px 22px;">
+      <a href="${ADMIN_ORDERS_URL}"
+         style="display:block;width:100%;text-align:center;padding:13px 18px;background:#0f172a;color:#ffffff;font-size:13px;font-weight:700;text-decoration:none;border-radius:9999px;box-sizing:border-box;">
+        Open orders dashboard →
+      </a>
+    </td>
+  </tr>`;
+
+  const html = emailWrapper(bodyHtml, `New order #${orderId} – ${customerName}`);
+
+  const { error } = await resend.emails.send({
+    from: FROM_EMAIL,
+    to: OWNER_ORDER_EMAIL,
+    subject: `New order #${orderId} – ${schoolName !== '—' ? schoolName : 'The Uniform Lab'}`,
+    html,
+  });
+
+  if (error) {
+    throw new Error(`Resend error: ${error.message}`);
+  }
+}
+
+/* ─────────────────────────────────────────────────────────── */
+/* 4. OWNER EXCHANGE REQUEST EMAIL                              */
+/* ─────────────────────────────────────────────────────────── */
+
+/**
+ * Sends a concise summary email to the owner whenever a customer
+ * submits a new exchange request.
+ *
+ * Mirrors the key data shown in the admin panel:
+ * - Order ID + basic order info
+ * - Customer + contact
+ * - Address
+ * - Item being exchanged (size, color, qty)
+ * - Reason + current status
+ */
+async function sendOwnerExchangeRequestEmail(exchangeReq) {
+  const resend = getResend();
+
+  if (!resend) {
+    console.warn('[emailService] RESEND_API_KEY not set – skipping owner exchange email.');
+    return;
+  }
+
+  if (!OWNER_ORDER_EMAIL) {
+    console.warn('[emailService] OWNER_ORDER_EMAIL not configured – skipping owner exchange email.');
+    return;
+  }
+
+  if (!exchangeReq) return;
+
+  const orderId = exchangeReq.orderUniqueId || (exchangeReq.order && exchangeReq.order.uniqueOrderId) || 'N/A';
+  const createdAt = exchangeReq.createdAt
+    ? new Date(exchangeReq.createdAt).toLocaleString('en-IN', {
+        day: 'numeric',
+        month: 'short',
+        year: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+      })
+    : '';
+
+  const customerName = exchangeReq.customerName || 'Customer';
+  const customerEmail = exchangeReq.customerEmail || '—';
+  const customerPhone = exchangeReq.customerPhone || '—';
+
+  const addr = exchangeReq.customerAddress || {};
+  const addressName = addr.name || customerName;
+  const line1 = addr.line1 || '';
+  const line2 = addr.line2 || '';
+  const city = addr.city || '';
+  const state = addr.state || '';
+  const pincode = addr.pincode || '';
+  const phone = addr.phone || customerPhone || '—';
+
+  const addressLines = [line1, line2, city && `${city}`, state && `${state}`, pincode && `${pincode}`]
+    .filter(Boolean)
+    .join(', ');
+
+  const itemName = exchangeReq.itemName || 'Item';
+  const itemSize = exchangeReq.itemSize ? `Size ${exchangeReq.itemSize}` : '';
+  const itemColor = exchangeReq.itemColor || '';
+  const itemQty = exchangeReq.itemQuantity || 1;
+  const reason = exchangeReq.reason || '—';
+  const status = exchangeReq.status || 'Pending';
+  const itemImageUrl = (exchangeReq.itemImage || '').replace(/&/g, '&amp;');
+  const itemImageCell = itemImageUrl
+    ? `<td style="padding:10px 14px;vertical-align:middle;width:64px;"><img src="${itemImageUrl}" alt="" width="64" height="64" style="display:block;width:64px;height:64px;object-fit:cover;border-radius:8px;border:1px solid #e2e8f0;" /></td>`
+    : '';
+
+  const adminExchangeUrl = `${ADMIN_BASE_URL}/exchanges`;
+
+  const bodyHtml = `
+  <tr>
+    <td style="padding:22px 20px 10px;">
+      <p style="margin:0 0 6px;font-size:12px;letter-spacing:0.12em;text-transform:uppercase;color:#94a3b8;font-weight:600;">
+        New Exchange Request
+      </p>
+      <h2 style="margin:0 0 10px;font-size:18px;color:#0f172a;font-weight:750;">
+        Order #${orderId}
+      </h2>
+      <p style="margin:0 0 12px;font-size:12px;color:#9ca3af;">
+        Received at ${createdAt}
+      </p>
+    </td>
+  </tr>
+  <tr>
+    <td style="padding:0 20px 8px;">
+      <table width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;border-radius:12px;overflow:hidden;border:1px solid #e2e8f0;">
+        <tr>
+          <td style="padding:10px 14px;border-right:1px solid #e2e8f0;vertical-align:top;width:50%;font-size:12px;color:#0f172a;">
+            <div style="font-size:11px;letter-spacing:0.08em;text-transform:uppercase;color:#9ca3af;margin-bottom:4px;">Customer</div>
+            <div style="font-size:13px;font-weight:600;margin-bottom:2px;">${customerName}</div>
+            <div style="font-size:12px;color:#64748b;margin-bottom:2px;">${customerEmail}</div>
+            <div style="font-size:12px;color:#64748b;">${customerPhone}</div>
+          </td>
+          <td style="padding:10px 14px;vertical-align:top;width:50%;font-size:12px;color:#0f172a;">
+            <div style="font-size:11px;letter-spacing:0.08em;text-transform:uppercase;color:#9ca3af;margin-bottom:4px;">Ship to</div>
+            <div style="font-size:13px;font-weight:600;margin-bottom:2px;">${addressName}</div>
+            <div style="font-size:12px;color:#64748b;margin-bottom:2px;">${addressLines || '—'}</div>
+            <div style="font-size:12px;color:#64748b;">${phone}</div>
+          </td>
+        </tr>
+      </table>
+    </td>
+  </tr>
+  <tr>
+    <td style="padding:4px 20px 12px;">
+      <table width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;border-radius:12px;overflow:hidden;border:1px solid #e2e8f0;">
+        <tr>
+          <td colspan="${itemImageUrl ? 3 : 2}" style="background:#f8fafc;padding:9px 14px;border-bottom:1px solid #e2e8f0;font-size:12px;color:#64748b;">
+            <strong style="color:#0f172a;">Item requested for exchange</strong>
+          </td>
+        </tr>
+        <tr>
+          ${itemImageCell}
+          <td style="padding:10px 14px;font-size:13px;color:#0f172a;vertical-align:middle;">
+            <div style="font-weight:600;margin-bottom:2px;">${itemName}</div>
+            <div style="font-size:12px;color:#64748b;">
+              ${[itemSize, itemColor].filter(Boolean).join(' · ') || ''}
+            </div>
+          </td>
+          <td style="padding:10px 14px;font-size:12px;color:#64748b;text-align:right;white-space:nowrap;vertical-align:middle;">
+            Qty: <strong style="color:#0f172a;">${itemQty}</strong>
+          </td>
+        </tr>
+        <tr>
+          <td colspan="${itemImageUrl ? 3 : 2}" style="padding:8px 14px 10px;border-top:1px solid #e5e7eb;font-size:12px;color:#111827;">
+            <div style="font-size:11px;letter-spacing:0.08em;text-transform:uppercase;color:#9ca3af;margin-bottom:4px;">Reason</div>
+            <div style="font-size:12px;color:#1f2933;line-height:1.5;white-space:pre-line;">${reason}</div>
+          </td>
+        </tr>
+        <tr>
+          <td colspan="${itemImageUrl ? 3 : 2}" style="padding:6px 14px 10px;border-top:1px solid #e5e7eb;font-size:12px;color:#111827;">
+            <span style="font-size:11px;letter-spacing:0.08em;text-transform:uppercase;color:#9ca3af;margin-right:6px;">Status</span>
+            <span style="display:inline-block;padding:3px 10px;border-radius:9999px;border:1px solid #e5e7eb;font-size:11px;color:#0f172a;background:#f9fafb;">
+              ${status}
+            </span>
+          </td>
+        </tr>
+      </table>
+    </td>
+  </tr>
+  <tr>
+    <td style="padding:0 20px 22px;">
+      <a href="${adminExchangeUrl}"
+         style="display:block;width:100%;text-align:center;padding:13px 18px;background:#0f172a;color:#ffffff;font-size:13px;font-weight:700;text-decoration:none;border-radius:9999px;box-sizing:border-box;">
+        Open exchange dashboard →
+      </a>
+    </td>
+  </tr>`;
+
+  const html = emailWrapper(
+    bodyHtml,
+    `New exchange request for order #${orderId} – ${customerName}`
+  );
+
+  const { error } = await resend.emails.send({
+    from: FROM_EMAIL,
+    to: OWNER_ORDER_EMAIL,
+    subject: `New exchange request – Order #${orderId}`,
+    html,
+  });
+
+  if (error) {
+    throw new Error(`Resend error: ${error.message}`);
+  }
+}
+
+module.exports = {
+  sendPasswordResetEmail,
+  sendOrderStatusEmail,
+  sendOwnerNewOrderEmail,
+  sendOwnerExchangeRequestEmail,
+};

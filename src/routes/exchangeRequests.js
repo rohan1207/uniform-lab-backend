@@ -2,6 +2,7 @@ const express = require('express');
 const ExchangeRequest = require('../models/ExchangeRequest');
 const Order = require('../models/Order');
 const Customer = require('../models/Customer');
+const { sendOwnerExchangeRequestEmail } = require('../utils/emailService');
 
 // ─── Customer-facing router (mounted under /api/customer, already auth-guarded) ───
 const customerRouter = express.Router();
@@ -52,6 +53,15 @@ customerRouter.post('/', async (req, res) => {
     itemQuantity: item.quantity,
     itemImage: item.imageUrl,
     reason: String(reason).trim(),
+  });
+
+  // Owner notification email – background only, non-blocking
+  sendOwnerExchangeRequestEmail(exchangeReq).catch((err) => {
+    // eslint-disable-next-line no-console
+    console.error(
+      `[OwnerExchangeEmail] Failed owner notification for exchange request ${exchangeReq._id}:`,
+      err.message
+    );
   });
 
   return res.status(201).json(exchangeReq);

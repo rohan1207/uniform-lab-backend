@@ -4,6 +4,7 @@ const crypto = require('crypto');
 const Order = require('../models/Order');
 const CheckoutSession = require('../models/CheckoutSession');
 const Product = require('../models/Product');
+const { sendOrderStatusEmail, sendOwnerNewOrderEmail } = require('../utils/emailService');
 
 const publicRouter = express.Router();
 
@@ -267,9 +268,15 @@ publicRouter.post('/instamojo/webhook', async (req, res) => {
       gatewayRawWebhook: payload,
     });
 
+    // Ensure school is populated so owner email can show school name
+    try {
+      await order.populate('school', 'name');
+    } catch {
+      // non-fatal if population fails
+    }
+
     // Fire initial "order confirmed" email as soon as the payment is credited.
     if (session.customerEmail) {
-      const { sendOrderStatusEmail } = require('../utils/emailService');
       const custName = session.customerName || 'Customer';
       sendOrderStatusEmail(session.customerEmail, custName, order, 'confirmed').catch((err) => {
         // eslint-disable-next-line no-console
@@ -279,6 +286,17 @@ publicRouter.post('/instamojo/webhook', async (req, res) => {
         );
       });
     }
+
+    // Owner notification email – background only
+    sendOwnerNewOrderEmail(order).catch((err) => {
+      // eslint-disable-next-line no-console
+      console.error(
+        `[OwnerOrderEmail] Failed owner notification (Instamojo webhook) for order ${
+          order.uniqueOrderId || order._id
+        }:`,
+        err.message
+      );
+    });
 
     session.status = 'Completed';
     await session.save();

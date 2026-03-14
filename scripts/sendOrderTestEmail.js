@@ -9,7 +9,7 @@
  * Required env:
  *   RESEND_API_KEY   – your Resend API key
  * Optional:
- *   TEST_EMAIL       – override recipient (defaults to rohanambhore7@gmail.com)
+ *   TEST_EMAIL       – override recipient (defaults to nivi12@gmail.com)
  *   FROM_EMAIL, FRONTEND_URL – same as main app (see emailService.js)
  */
 
@@ -18,7 +18,7 @@ require('dotenv').config();
 
 const { sendOrderStatusEmail } = require('../src/utils/emailService');
 
-const toEmail = process.env.TEST_EMAIL || 'rohanambhore7@gmail.com';
+const toEmail = process.env.TEST_EMAIL || 'nivi12@gmail.com';
 
 // Minimal mock order object using the same shape as real orders
 const mockOrder = {

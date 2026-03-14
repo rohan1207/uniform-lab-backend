@@ -3,7 +3,7 @@ const Order = require('../models/Order');
 const DeliveryPartner = require('../models/DeliveryPartner');
 const Product = require('../models/Product');
 const generateUniqueOrderId = require('../utils/orderId');
-const { sendOrderStatusEmail } = require('../utils/emailService');
+const { sendOrderStatusEmail, sendOwnerNewOrderEmail } = require('../utils/emailService');
 const { emitUnfulfilledCount } = require('../socket');
 
 const publicRouter = express.Router();
@@ -58,6 +58,13 @@ publicRouter.post('/', async (req, res) => {
     assignedDeliveryPartner: defaultPartner ? defaultPartner._id : undefined,
   });
 
+  // Populate school name for downstream consumers (emails, admin UI etc.)
+  try {
+    await order.populate('school', 'name');
+  } catch {
+    // non-fatal if population fails
+  }
+
   // Fire initial "order placed / confirmed" email in the background (non-blocking)
   if (customerEmail) {
     const custName = customerName || 'Customer';
@@ -69,6 +76,15 @@ publicRouter.post('/', async (req, res) => {
       );
     });
   }
+
+  // Owner notification email – fire in background, never block the API response
+  sendOwnerNewOrderEmail(order).catch((err) => {
+    // eslint-disable-next-line no-console
+    console.error(
+      `[OwnerOrderEmail] Failed owner notification for order ${order.uniqueOrderId || order._id}:`,
+      err.message
+    );
+  });
 
   emitUnfulfilledCount().catch(() => {});
   res.status(201).json(order);
