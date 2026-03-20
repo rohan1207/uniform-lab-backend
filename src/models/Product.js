@@ -79,6 +79,14 @@ const productSchema = new mongoose.Schema(
 
     variants: [variantSchema],
 
+    // Manual stock controls for UI/notify flows (separate from variant stockQty)
+    // - manualOutOfStock: admin can mark the whole product out-of-stock quickly.
+    // - outOfStockByColor: admin can mark specific colors out-of-stock in edit mode.
+    // Frontend treats product as "out of stock" when:
+    //   manualOutOfStock === true OR (every selected color is outOfStockByColor[colorName] === true).
+    manualOutOfStock: { type: Boolean, default: false },
+    outOfStockByColor: { type: Map, of: Boolean },
+
     tags: [{ type: String }],
     displayOrder: { type: Number, default: null }, // manual sort order per school, set from admin panel
     isActive: { type: Boolean, default: true },

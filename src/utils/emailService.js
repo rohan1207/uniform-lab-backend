@@ -714,9 +714,77 @@ async function sendOwnerExchangeRequestEmail(exchangeReq) {
   }
 }
 
+/* ─────────────────────────────────────────────────────────── */
+/* 5. STOCK AVAILABLE EMAIL                                   */
+/* ─────────────────────────────────────────────────────────── */
+
+/**
+ * Sends email to a customer when their requested product/color
+ * becomes available again.
+ */
+async function sendStockAvailableEmail({ toEmail, customerName, schoolName, productName, shopNowUrl }) {
+  const resend = getResend();
+  if (!resend) {
+    console.warn('[emailService] RESEND_API_KEY not set – skipping stock available email.');
+    return;
+  }
+
+  if (!toEmail) return;
+
+  const safeCustomerName = customerName || 'there';
+  const safeSchoolName = schoolName || '';
+  const safeProductName = productName || '';
+  const safeShopNowUrl = shopNowUrl || FRONTEND_URL;
+
+  const bodyHtml = `
+  <tr>
+    <td style="padding:26px 20px 8px;">
+      <div style="display:inline-block;background:#d1fae5;border:1px solid #6ee7b7;border-radius:9999px;padding:5px 14px;margin-bottom:16px;">
+        <span style="color:#065f46;font-size:12px;font-weight:700;letter-spacing:0.04em;text-transform:uppercase;">Available now</span>
+      </div>
+      <h2 style="margin:0 0 10px;color:#0f172a;font-size:20px;font-weight:800;">
+        Your requested item is back in stock
+      </h2>
+      <p style="margin:0 0 16px;color:#475569;font-size:14px;line-height:1.7;">
+        Hi <strong>${safeCustomerName}</strong>,
+        <br />
+        <span style="color:#0f172a;font-weight:700;">${safeProductName}</span>
+        ${safeSchoolName ? `for ${safeSchoolName}` : ''} is now available again.
+      </p>
+    </td>
+  </tr>
+
+  <tr>
+    <td style="padding:0 20px 24px;">
+      <a href="${safeShopNowUrl}"
+         style="display:block;width:100%;text-align:center;padding:13px 18px;background:#0f172a;color:#ffffff;font-size:13px;font-weight:800;text-decoration:none;border-radius:9999px;box-sizing:border-box;">
+        Shop Now →
+      </a>
+      <p style="margin:12px 0 0;color:#94a3b8;font-size:11px;line-height:1.6;">
+        Thanks for your request. We notify customers as soon as availability returns.
+      </p>
+    </td>
+  </tr>`;
+
+  const html = emailWrapper(bodyHtml, `Stock available – ${safeProductName}`);
+
+  const { error } = await resend.emails.send({
+    from: FROM_EMAIL,
+    to: toEmail,
+    subject: `Stock available – ${safeProductName}`,
+    html,
+  });
+
+  if (error) {
+    throw new Error(`Resend error: ${error.message}`);
+  }
+}
+
 module.exports = {
   sendPasswordResetEmail,
   sendOrderStatusEmail,
   sendOwnerNewOrderEmail,
   sendOwnerExchangeRequestEmail,
+  sendStockAvailableEmail,
 };
+
