@@ -26,6 +26,78 @@ async function destroyCloudinaryIds(publicIds) {
   );
 }
 
+function deriveIsColorOOS(product, colorName) {
+  if (!colorName) return product?.manualOutOfStock === true;
+  if (product?.manualOutOfStock === true) return true;
+  const map = product?.outOfStockByColor || {};
+  const v = map instanceof Map ? map.get(colorName) : map[colorName];
+  return v === true;
+}
+
+function deriveIsProductOOS(product) {
+  if (product?.manualOutOfStock === true) return true;
+  const colors = Array.isArray(product?.colors)
+    ? product.colors.map((c) => c?.name).filter(Boolean)
+    : [];
+  if (!colors.length) return false;
+  return colors.every((cn) => deriveIsColorOOS(product, cn));
+}
+
+async function processStockNotifyTransitions({ productId, oldProduct, newProduct }) {
+  const oldProductOOS = deriveIsProductOOS(oldProduct);
+  const newProductOOS = deriveIsProductOOS(newProduct);
+  const pending = await StockNotify.find({ productId: productId });
+  if (!pending.length) return;
+
+  const frontendBase = (process.env.FRONTEND_URL || 'https://uniformlab.in').replace(/\/+$/, '');
+  const sentIds = [];
+
+  for (const entry of pending) {
+    try {
+      if (entry.notifyType === 'PRODUCT') {
+        const shouldSend = oldProductOOS === true && newProductOOS === false;
+        if (!shouldSend) continue;
+      } else if (entry.notifyType === 'COLOR') {
+        const oldColorOOS = deriveIsColorOOS(oldProduct, entry.colorName);
+        const newColorOOS = deriveIsColorOOS(newProduct, entry.colorName);
+        if (!(oldColorOOS === true && newColorOOS === false)) continue;
+      } else {
+        continue;
+      }
+
+      const shopUrlBase = `${frontendBase}/product/${entry.productId}`;
+      const qs = new URLSearchParams();
+      if (entry.schoolSlug) qs.set('school', entry.schoolSlug);
+      if (entry.notifyType === 'COLOR' && entry.colorName) qs.set('color', entry.colorName);
+      if (entry.notifyType === 'PRODUCT') {
+        const allColors = Array.isArray(newProduct.colors)
+          ? newProduct.colors.map((c) => c?.name).filter(Boolean)
+          : [];
+        const firstAvailable = allColors.find((cn) => !deriveIsColorOOS(newProduct, cn));
+        if (firstAvailable) qs.set('color', firstAvailable);
+      }
+      const shopNowUrl = `${shopUrlBase}?${qs.toString()}`;
+
+      await sendStockAvailableEmail({
+        toEmail: entry.email,
+        customerName: entry.name,
+        schoolName: entry.schoolName,
+        productName: entry.productName,
+        shopNowUrl,
+      });
+
+      sentIds.push(entry._id);
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error('[stockNotify] failed send:', err?.message || err);
+    }
+  }
+
+  if (sentIds.length) {
+    await StockNotify.deleteMany({ _id: { $in: sentIds } });
+  }
+}
+
 // PUBLIC
 // GET /api/public/products/:id
 publicRouter.get('/:id', async (req, res) => {
@@ -223,23 +295,6 @@ adminRouter.patch('/:id/availability', async (req, res) => {
     const oldProduct = await Product.findById(productId).lean();
     if (!oldProduct) return res.status(404).json({ error: { message: 'Product not found' } });
 
-    const deriveIsColorOOS = (product, colorName) => {
-      if (!colorName) return product.manualOutOfStock === true;
-      if (product.manualOutOfStock === true) return true;
-      const map = product.outOfStockByColor || {};
-      const v = map instanceof Map ? map.get(colorName) : map[colorName];
-      return v === true;
-    };
-
-    const deriveIsProductOOS = (product) => {
-      if (product.manualOutOfStock === true) return true;
-      const colors = Array.isArray(product.colors) ? product.colors.map((c) => c?.name).filter(Boolean) : [];
-      if (!colors.length) return false; // no colors => only manual toggle can OOS the product
-      return colors.every((cn) => deriveIsColorOOS(product, cn));
-    };
-
-    const oldProductOOS = deriveIsProductOOS(oldProduct);
-
     const newProduct = await Product.findByIdAndUpdate(
       productId,
       { $set: setDoc },
@@ -248,66 +303,9 @@ adminRouter.patch('/:id/availability', async (req, res) => {
 
     if (!newProduct) return res.status(404).json({ error: { message: 'Product not found' } });
 
-    const newProductOOS = deriveIsProductOOS(newProduct);
-
     // Process notify requests in background; HTTP response returns immediately.
     (async () => {
-      const pending = await StockNotify.find({ productId: productId });
-      if (!pending.length) return;
-
-      const frontendBase = (process.env.FRONTEND_URL || 'https://uniformlab.in').replace(/\/+$/, '');
-
-      const sentIds = [];
-      for (const entry of pending) {
-        try {
-          if (entry.notifyType === 'PRODUCT') {
-            const shouldSend = oldProductOOS === true && newProductOOS === false;
-            if (!shouldSend) continue;
-          } else if (entry.notifyType === 'COLOR') {
-            const oldColorOOS = deriveIsColorOOS(oldProduct, entry.colorName);
-            const newColorOOS = deriveIsColorOOS(newProduct, entry.colorName);
-            if (!(oldColorOOS === true && newColorOOS === false)) continue;
-          } else {
-            continue;
-          }
-
-          const shopUrlBase = `${frontendBase}/product/${entry.productId}`;
-          const qs = new URLSearchParams();
-          if (entry.schoolSlug) qs.set('school', entry.schoolSlug);
-          if (entry.notifyType === 'COLOR' && entry.colorName) {
-            qs.set('color', entry.colorName);
-          }
-          // For PRODUCT notifications, pick a currently-available color (so the PDP
-          // doesn't immediately show "Notify me" due to default color selection).
-          if (entry.notifyType === 'PRODUCT') {
-            const allColors = Array.isArray(newProduct.colors)
-              ? newProduct.colors.map((c) => c?.name).filter(Boolean)
-              : [];
-            const firstAvailable = allColors.find(
-              (cn) => !deriveIsColorOOS(newProduct, cn),
-            );
-            if (firstAvailable) qs.set('color', firstAvailable);
-          }
-          const shopNowUrl = `${shopUrlBase}?${qs.toString()}`;
-
-          await sendStockAvailableEmail({
-            toEmail: entry.email,
-            customerName: entry.name,
-            schoolName: entry.schoolName,
-            productName: entry.productName,
-            shopNowUrl,
-          });
-
-          sentIds.push(entry._id);
-        } catch (err) {
-          // eslint-disable-next-line no-console
-          console.error('[stockNotify] failed send:', err?.message || err);
-        }
-      }
-
-      if (sentIds.length) {
-        await StockNotify.deleteMany({ _id: { $in: sentIds } });
-      }
+      await processStockNotifyTransitions({ productId, oldProduct, newProduct });
     })();
 
     res.json({
@@ -325,6 +323,11 @@ adminRouter.patch('/:id/availability', async (req, res) => {
 // PATCH /api/admin/products/:id
 adminRouter.patch('/:id', async (req, res) => {
   try {
+    const oldProduct = await Product.findById(req.params.id).lean();
+    if (!oldProduct) {
+      return res.status(404).json({ error: { message: 'Product not found' } });
+    }
+
     const update = { ...buildProductFromBody(req.body) };
     delete update._id;
 
@@ -369,10 +372,17 @@ adminRouter.patch('/:id', async (req, res) => {
       req.params.id,
       { $set: setDoc },
       { new: true, runValidators: true }
-    );
-    if (!product) {
-      return res.status(404).json({ error: { message: 'Product not found' } });
-    }
+    ).lean();
+
+    // Also process stock notifications from full edit-save (color toggles are here).
+    (async () => {
+      await processStockNotifyTransitions({
+        productId: req.params.id,
+        oldProduct,
+        newProduct: product,
+      });
+    })();
+
     res.json(product);
   } catch (err) {
     console.error('PATCH /products/:id error:', err);
