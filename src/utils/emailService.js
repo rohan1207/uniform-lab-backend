@@ -240,9 +240,22 @@ async function sendOrderStatusEmail(toEmail, customerName, order, newStatus) {
       </tr>`;
   }).join('');
 
-  const totalAmount = order.totalAmount != null
-    ? `₹${Number(order.totalAmount).toLocaleString('en-IN')}`
-    : '';
+  const deliveryChargeNumber =
+    typeof order.deliveryCharge === 'number' && !Number.isNaN(order.deliveryCharge)
+      ? order.deliveryCharge
+      : 125;
+  const itemsSubtotalNumber = items.reduce((sum, item) => {
+    const qty = Number(item.quantity || 1);
+    const unit = Number(item.price || 0);
+    return sum + qty * unit;
+  }, 0);
+  const totalAmountNumber =
+    order.totalAmount != null && !Number.isNaN(Number(order.totalAmount))
+      ? Number(order.totalAmount)
+      : itemsSubtotalNumber + deliveryChargeNumber;
+  const itemsSubtotal = `₹${itemsSubtotalNumber.toLocaleString('en-IN')}`;
+  const deliveryCharge = `₹${deliveryChargeNumber.toLocaleString('en-IN')}`;
+  const totalAmount = `₹${totalAmountNumber.toLocaleString('en-IN')}`;
 
   const ordersLink = `${FRONTEND_URL}/account?tab=orders`;
   const whatsappLink = 'https://wa.me/919028552855';
@@ -276,15 +289,22 @@ async function sendOrderStatusEmail(toEmail, customerName, order, newStatus) {
             ${itemRowsHtml || `<tr><td colspan="3" style="padding:16px 0;color:#94a3b8;font-size:13px;">No item details available.</td></tr>`}
           </table>
         </div>
-        ${totalAmount ? `
         <div style="border-top:2px solid #e2e8f0;padding:10px 16px;">
           <table width="100%" cellpadding="0" cellspacing="0">
             <tr>
-              <td style="color:#1e293b;font-size:14px;font-weight:700;">Total</td>
-              <td style="text-align:right;color:#004C99;font-size:16px;font-weight:800;">${totalAmount}</td>
+              <td style="color:#64748b;font-size:12px;font-weight:600;">Items total</td>
+              <td style="text-align:right;color:#1e293b;font-size:13px;font-weight:700;">${itemsSubtotal}</td>
+            </tr>
+            <tr>
+              <td style="color:#64748b;font-size:12px;font-weight:600;padding-top:4px;">Delivery charge</td>
+              <td style="text-align:right;color:#1e293b;font-size:13px;font-weight:700;padding-top:4px;">${deliveryCharge}</td>
+            </tr>
+            <tr>
+              <td style="color:#1e293b;font-size:14px;font-weight:700;padding-top:6px;">Total</td>
+              <td style="text-align:right;color:#004C99;font-size:16px;font-weight:800;padding-top:6px;">${totalAmount}</td>
             </tr>
           </table>
-        </div>` : ''}
+        </div>
       </div>
     </td>
   </tr>
