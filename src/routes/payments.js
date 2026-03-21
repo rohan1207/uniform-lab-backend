@@ -1,9 +1,11 @@
 const express = require('express');
 const https = require('https');
+const { URL } = require('url');
 const crypto = require('crypto');
 const Order = require('../models/Order');
 const CheckoutSession = require('../models/CheckoutSession');
 const Product = require('../models/Product');
+const generateUniqueOrderId = require('../utils/orderId');
 const { sendOrderStatusEmail, sendOwnerNewOrderEmail } = require('../utils/emailService');
 
 const publicRouter = express.Router();
@@ -24,12 +26,207 @@ function getBackendBaseUrl(req) {
   return `${proto}://${req.get('host')}`;
 }
 
+/**
+ * GET Instamojo payment-request JSON (for redirect reconciliation).
+ */
+function instamojoGetPaymentRequest(paymentRequestId) {
+  const { apiKey, authToken, baseUrl } = getInstamojoConfig();
+  const base = baseUrl.replace(/\/+$/, '');
+  const path = `payment-requests/${encodeURIComponent(paymentRequestId)}/`;
+  const url = new URL(path, `${base}/`);
+
+  return new Promise((resolve, reject) => {
+    const opts = {
+      method: 'GET',
+      headers: {
+        'X-Api-Key': apiKey,
+        'X-Auth-Token': authToken,
+      },
+    };
+
+    const req = https.request(url, opts, (res) => {
+      let data = '';
+      res.on('data', (chunk) => {
+        data += chunk;
+      });
+      res.on('end', () => {
+        try {
+          const json = JSON.parse(data || '{}');
+          if (!res.statusCode || res.statusCode >= 400 || json.success === false) {
+            const msg = json?.message || json?.error || `HTTP ${res.statusCode}`;
+            return reject(new Error(typeof msg === 'string' ? msg : JSON.stringify(msg)));
+          }
+          const pr = json.payment_request || json;
+          resolve(pr);
+        } catch (e) {
+          reject(e);
+        }
+      });
+    });
+
+    req.on('error', reject);
+    req.end();
+  });
+}
+
+/**
+ * True if this payment id appears in the payment request with a successful status.
+ */
+function paymentRequestContainsCompletedPayment(pr, paymentId) {
+  if (!pr || !paymentId) return false;
+  const payments = Array.isArray(pr.payments) ? pr.payments : [];
+  const pid = String(paymentId);
+  return payments.some((p) => {
+    if (!p || String(p.id) !== pid) return false;
+    const st = String(p.status || '').toLowerCase();
+    return st === 'credit' || st === 'completed';
+  });
+}
+
+/**
+ * Idempotent: create paid order from a checkout session + Instamojo payment id.
+ * Safe to call from webhook and redirect (reconciliation).
+ */
+async function fulfillInstamojoPaidOrder({
+  paymentRequestId,
+  paymentId,
+  webhookPayload,
+  source,
+}) {
+  if (!paymentRequestId || !paymentId) {
+    return { order: null, created: false, reason: 'missing_ids' };
+  }
+
+  const pidStr = String(paymentId);
+
+  const existingByPayment = await Order.findOne({ gatewayPaymentId: pidStr });
+  if (existingByPayment) {
+    const session = await CheckoutSession.findOne({ paymentRequestId });
+    if (session && session.status === 'Pending') {
+      session.status = 'Completed';
+      await session.save();
+    }
+    return { order: existingByPayment, created: false, duplicate: true };
+  }
+
+  const existingForPr = await Order.findOne({ gatewayPaymentRequestId: paymentRequestId });
+  if (existingForPr) {
+    const session = await CheckoutSession.findOne({ paymentRequestId });
+    if (session && session.status === 'Pending') {
+      session.status = 'Completed';
+      await session.save();
+    }
+    if (String(existingForPr.gatewayPaymentId || '') !== pidStr) {
+      // eslint-disable-next-line no-console
+      console.error('[Instamojo] Order exists for payment_request_id but different payment_id', {
+        paymentRequestId,
+        expected: existingForPr.gatewayPaymentId,
+        got: pidStr,
+      });
+    }
+    return { order: existingForPr, created: false, duplicate: true };
+  }
+
+  const session = await CheckoutSession.findOne({ paymentRequestId });
+  if (!session) {
+    // eslint-disable-next-line no-console
+    console.error('[Instamojo] fulfill: no CheckoutSession for payment_request_id', paymentRequestId);
+    return { order: null, created: false, reason: 'no_session' };
+  }
+
+  let schoolId;
+  try {
+    const firstItem = (session.items || [])[0];
+    if (firstItem && firstItem.productId) {
+      const product = await Product.findById(firstItem.productId).select('school');
+      if (product && product.school) {
+        schoolId = product.school;
+      }
+    }
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.error('Failed to resolve school for order', err);
+  }
+
+  const rawMeta = webhookPayload || { source: source || 'reconciliation', reconciledAt: new Date().toISOString() };
+
+  let order;
+  try {
+    order = await Order.create({
+      uniqueOrderId: generateUniqueOrderId(),
+      school: schoolId,
+      customerName: session.customerName,
+      customerEmail: session.customerEmail,
+      customerPhone: session.customerPhone,
+      address: session.address,
+      items: session.items.map((i) => ({
+        product: i.productId,
+        productName: i.productName,
+        price: i.price,
+        quantity: i.quantity,
+        size: i.size,
+        color: i.color,
+        imageUrl: i.imageUrl,
+      })),
+      totalAmount: session.totalAmount,
+      deliveryCharge: 125,
+      deliveryMethod: '₹125 delivery',
+      paymentMethod: 'Online',
+      paymentStatus: 'Paid',
+      gatewayPaymentId: pidStr,
+      gatewayPaymentRequestId: paymentRequestId,
+      gatewayRawWebhook: rawMeta,
+    });
+  } catch (err) {
+    // Race: webhook + redirect both created — fetch existing
+    if (err && err.code === 11000) {
+      const dup = await Order.findOne({ gatewayPaymentId: pidStr });
+      if (dup) {
+        if (session.status === 'Pending') {
+          session.status = 'Completed';
+          await session.save();
+        }
+        return { order: dup, created: false, duplicate: true };
+      }
+    }
+    throw err;
+  }
+
+  try {
+    await order.populate('school', 'name');
+  } catch {
+    // non-fatal
+  }
+
+  session.status = 'Completed';
+  await session.save();
+
+  if (session.customerEmail) {
+    const custName = session.customerName || 'Customer';
+    sendOrderStatusEmail(session.customerEmail, custName, order, 'confirmed').catch((e) => {
+      // eslint-disable-next-line no-console
+      console.error(
+        `[OrderEmail] Failed confirmation (${source}) for order ${order.uniqueOrderId || order._id}:`,
+        e.message,
+      );
+    });
+  }
+
+  sendOwnerNewOrderEmail(order).catch((e) => {
+    // eslint-disable-next-line no-console
+    console.error(
+      `[OwnerOrderEmail] Failed (${source}) for order ${order.uniqueOrderId || order._id}:`,
+      e.message,
+    );
+  });
+
+  return { order, created: true, duplicate: false };
+}
+
 // Helper: call Instamojo Payment Request API
 function createPaymentRequest(req, { amount, buyerName, email, phone, purpose }) {
   const { apiKey, authToken, baseUrl } = getInstamojoConfig();
   const base = baseUrl.replace(/\/+$/, '');
-  // IMPORTANT: do NOT start path with '/', otherwise the '/api/1.1' part is dropped.
-  // We want: https://www.instamojo.com/api/1.1/payment-requests/
   const url = new URL('payment-requests/', `${base}/`);
 
   const backendBase = getBackendBaseUrl(req);
@@ -47,8 +244,6 @@ function createPaymentRequest(req, { amount, buyerName, email, phone, purpose })
     allow_repeated_payments: 'False',
   });
 
-  // Webhook cannot be localhost/127.0.0.1 – Instamojo rejects it.
-  // Only attach webhook when running on a real public domain.
   if (
     backendBase &&
     !backendBase.includes('localhost') &&
@@ -120,9 +315,9 @@ publicRouter.post('/instamojo/checkout', async (req, res) => {
     customerPhone,
     address,
     items,
-    totalAmount,      // grand total sent from frontend (items + delivery)
-    itemsTotal,       // items-only subtotal (optional, informational)
-    deliveryCharge,   // should always be 125
+    totalAmount,
+    itemsTotal,
+    deliveryCharge,
   } = req.body || {};
 
   if (!customerName || !address || !Array.isArray(items) || !items.length || !totalAmount) {
@@ -135,7 +330,6 @@ publicRouter.post('/instamojo/checkout', async (req, res) => {
     return res.status(400).json({ error: { message: 'Invalid total amount' } });
   }
 
-  // Always enforce ₹125 delivery charge server-side — never trust client for this
   const DELIVERY_CHARGE = 125;
   const normItemsTotal = Number.isFinite(Number(itemsTotal)) ? Number(itemsTotal) : Number(totalAmount) - DELIVERY_CHARGE;
   const normAmount = normItemsTotal + DELIVERY_CHARGE;
@@ -190,14 +384,13 @@ publicRouter.post('/instamojo/checkout', async (req, res) => {
 // Middleware only for webhook: urlencoded parser
 publicRouter.use(
   '/instamojo/webhook',
-  express.urlencoded({ extended: false })
+  express.urlencoded({ extended: false }),
 );
 
 // POST /api/public/payments/instamojo/webhook
 publicRouter.post('/instamojo/webhook', async (req, res) => {
   const secret = process.env.INSTAMOJO_WEBHOOK_SECRET;
   if (!secret) {
-    // If not configured, do not accept webhooks
     return res.status(500).send('Webhook not configured');
   }
 
@@ -221,85 +414,17 @@ publicRouter.post('/instamojo/webhook', async (req, res) => {
 
   const session = await CheckoutSession.findOne({ paymentRequestId });
   if (!session) {
-    // Unknown session; acknowledge so Instamojo stops retrying
     return res.status(200).send('OK');
   }
 
   if (status === 'Credit' && session.status === 'Pending') {
-    // Resolve school from first product (all items are from same school)
-    let schoolId;
-    try {
-      const firstItem = (session.items || [])[0];
-      if (firstItem && firstItem.productId) {
-        const product = await Product.findById(firstItem.productId).select('school');
-        if (product && product.school) {
-          schoolId = product.school;
-        }
-      }
-    } catch (err) {
-      // eslint-disable-next-line no-console
-      console.error('Failed to resolve school for order', err);
-    }
-
-    // Create paid order
-    const order = await Order.create({
-      uniqueOrderId: require('../utils/orderId')(),
-      school: schoolId,
-      customerName: session.customerName,
-      customerEmail: session.customerEmail,
-      customerPhone: session.customerPhone,
-      address: session.address,
-      items: session.items.map((i) => ({
-        product: i.productId,
-        productName: i.productName,
-        price: i.price,
-        quantity: i.quantity,
-        size: i.size,
-        color: i.color,
-        imageUrl: i.imageUrl,
-      })),
-      totalAmount: session.totalAmount,
-      deliveryCharge: 125,
-      deliveryMethod: '₹125 delivery',
-      paymentMethod: 'Online',
-      paymentStatus: 'Paid',
-      gatewayPaymentId: paymentId,
-      gatewayPaymentRequestId: paymentRequestId,
-      gatewayRawWebhook: payload,
+    // Do not swallow errors — return 500 so Instamojo retries if DB/email path fails.
+    await fulfillInstamojoPaidOrder({
+      paymentRequestId,
+      paymentId,
+      webhookPayload: payload,
+      source: 'webhook',
     });
-
-    // Ensure school is populated so owner email can show school name
-    try {
-      await order.populate('school', 'name');
-    } catch {
-      // non-fatal if population fails
-    }
-
-    // Fire initial "order confirmed" email as soon as the payment is credited.
-    if (session.customerEmail) {
-      const custName = session.customerName || 'Customer';
-      sendOrderStatusEmail(session.customerEmail, custName, order, 'confirmed').catch((err) => {
-        // eslint-disable-next-line no-console
-        console.error(
-          `[OrderEmail] Failed initial confirmation (Instamojo webhook) for order ${order.uniqueOrderId || order._id}:`,
-          err.message
-        );
-      });
-    }
-
-    // Owner notification email – background only
-    sendOwnerNewOrderEmail(order).catch((err) => {
-      // eslint-disable-next-line no-console
-      console.error(
-        `[OwnerOrderEmail] Failed owner notification (Instamojo webhook) for order ${
-          order.uniqueOrderId || order._id
-        }:`,
-        err.message
-      );
-    });
-
-    session.status = 'Completed';
-    await session.save();
   } else if (status !== 'Credit' && session.status === 'Pending') {
     session.status = 'Failed';
     await session.save();
@@ -309,17 +434,78 @@ publicRouter.post('/instamojo/webhook', async (req, res) => {
 });
 
 // GET /api/public/payments/instamojo/redirect
-publicRouter.get('/instamojo/redirect', (req, res) => {
+// Reconciliation: if webhook was missed (sleep, timeout, MAC), user still returns here with
+// payment_id + payment_request_id — verify with Instamojo API and create order idempotently.
+publicRouter.get('/instamojo/redirect', async (req, res) => {
   const frontendBase = (process.env.FRONTEND_URL || '').replace(/\/+$/, '') || 'http://localhost:5173';
-  const { payment_status: paymentStatus } = req.query;
 
-  if (String(paymentStatus).toLowerCase() === 'credit') {
+  const q = req.query || {};
+  const paymentStatus = String(q.payment_status || '').toLowerCase();
+  let paymentRequestId = q.payment_request_id || q.paymentRequestId;
+  let paymentId = q.payment_id || q.paymentId;
+
+  const isCredit =
+    paymentStatus === 'credit' ||
+    paymentStatus === 'success' ||
+    paymentStatus === 'completed';
+
+  if (isCredit && paymentRequestId && !paymentId) {
+    try {
+      const pr = await instamojoGetPaymentRequest(paymentRequestId);
+      const payments = Array.isArray(pr.payments) ? pr.payments : [];
+      const last = payments.filter((p) => p && p.id).pop();
+      if (last && last.id) paymentId = last.id;
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.error('[Instamojo] redirect: could not fetch payment request', e?.message || e);
+    }
+  }
+
+  if (isCredit && paymentRequestId && paymentId) {
+    try {
+      const pr = await instamojoGetPaymentRequest(paymentRequestId);
+      const ok = paymentRequestContainsCompletedPayment(pr, paymentId);
+      if (!ok) {
+        // eslint-disable-next-line no-console
+        console.warn('[Instamojo] redirect: API list inconclusive; still reconciling (trust redirect)', {
+          paymentRequestId,
+          paymentId,
+        });
+      }
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.error('[Instamojo] redirect: verify API failed; still reconciling', e?.message || e);
+    }
+
+    try {
+      const result = await fulfillInstamojoPaidOrder({
+        paymentRequestId,
+        paymentId,
+        webhookPayload: { source: 'redirect_reconciliation', query: { ...q } },
+        source: 'redirect',
+      });
+      if (result.created) {
+        // eslint-disable-next-line no-console
+        console.log('[Instamojo] redirect: order created via reconciliation', result.order?.uniqueOrderId);
+      } else if (result.duplicate) {
+        // eslint-disable-next-line no-console
+        console.log('[Instamojo] redirect: order already existed (idempotent)');
+      } else if (result.reason === 'no_session') {
+        // eslint-disable-next-line no-console
+        console.warn('[Instamojo] redirect: no session — cannot create order');
+      }
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error('[Instamojo] redirect: fulfill failed', err?.message || err);
+    }
+  }
+
+  if (isCredit) {
     return res.redirect(`${frontendBase}/account?tab=orders&status=success`);
   }
-  // Pass reason so frontend can show a specific failure message
+
   const reason = String(paymentStatus || '').toLowerCase() === 'failed' ? 'failed' : 'cancelled';
   return res.redirect(`${frontendBase}/checkout?status=payment_failed&reason=${reason}`);
 });
 
 module.exports = { public: publicRouter };
-

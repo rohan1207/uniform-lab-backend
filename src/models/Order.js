@@ -69,5 +69,8 @@ const orderSchema = new mongoose.Schema(
 // Speed up customer order lookups
 orderSchema.index({ customerEmail: 1, createdAt: -1 });
 
+// Idempotent Instamojo reconciliation: one payment_id → at most one order
+orderSchema.index({ gatewayPaymentId: 1 }, { unique: true, sparse: true });
+
 module.exports = mongoose.model('Order', orderSchema);
 
