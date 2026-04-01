@@ -69,8 +69,11 @@ function instamojoGetPaymentRequest(paymentRequestId) {
   });
 }
 
+const FAILED_PAYMENT_STATUSES = new Set(['failed', 'failure', 'cancelled', 'canceled', 'refunded', 'void', 'reversed']);
+
 /**
- * True if this payment id appears in the payment request with a successful status.
+ * True if this payment id appears in the payment request with a successful (credited) status only.
+ * Never treats failed/cancelled/refunded as paid.
  */
 function paymentRequestContainsCompletedPayment(pr, paymentId) {
   if (!pr || !paymentId) return false;
@@ -79,8 +82,45 @@ function paymentRequestContainsCompletedPayment(pr, paymentId) {
   return payments.some((p) => {
     if (!p || String(p.id) !== pid) return false;
     const st = String(p.status || '').toLowerCase();
+    if (FAILED_PAYMENT_STATUSES.has(st)) return false;
     return st === 'credit' || st === 'completed';
   });
+}
+
+/**
+ * Redirect path only: confirm with Instamojo API that this payment is actually credited
+ * and (when possible) amount matches the checkout session. Never trust query string alone.
+ */
+async function verifyInstamojoRedirectPayment(paymentRequestId, paymentId) {
+  if (!paymentRequestId || !paymentId) {
+    return { verified: false, reason: 'missing_ids' };
+  }
+  try {
+    const pr = await instamojoGetPaymentRequest(paymentRequestId);
+    if (!paymentRequestContainsCompletedPayment(pr, paymentId)) {
+      return { verified: false, pr, reason: 'payment_not_credited_or_not_found' };
+    }
+    const session = await CheckoutSession.findOne({ paymentRequestId });
+    if (session && pr.amount != null && pr.amount !== '') {
+      const apiAmt = Number(pr.amount);
+      const sessAmt = Number(session.totalAmount);
+      if (Number.isFinite(apiAmt) && Number.isFinite(sessAmt) && Math.abs(apiAmt - sessAmt) > 0.02) {
+        // eslint-disable-next-line no-console
+        console.warn('[Instamojo] redirect: amount mismatch vs session — not fulfilling', {
+          paymentRequestId,
+          paymentId,
+          apiAmount: apiAmt,
+          sessionTotal: sessAmt,
+        });
+        return { verified: false, pr, reason: 'amount_mismatch' };
+      }
+    }
+    return { verified: true, pr };
+  } catch (e) {
+    // eslint-disable-next-line no-console
+    console.error('[Instamojo] redirect: API verify failed — not fulfilling', e?.message || e);
+    return { verified: false, reason: 'api_error', error: e };
+  }
 }
 
 /**
@@ -92,7 +132,19 @@ async function fulfillInstamojoPaidOrder({
   paymentId,
   webhookPayload,
   source,
+  /** Must be true only if paid status is already proven: webhook after MAC + status Credit, or redirect after verifyInstamojoRedirectPayment. */
+  trustedPaidVerified = false,
 }) {
+  if (!trustedPaidVerified) {
+    // eslint-disable-next-line no-console
+    console.error('[Instamojo] fulfill blocked: trustedPaidVerified is false — no order/email', {
+      source,
+      paymentRequestId,
+      paymentId,
+    });
+    return { order: null, created: false, reason: 'unverified' };
+  }
+
   if (!paymentRequestId || !paymentId) {
     return { order: null, created: false, reason: 'missing_ids' };
   }
@@ -418,12 +470,14 @@ publicRouter.post('/instamojo/webhook', async (req, res) => {
   }
 
   if (status === 'Credit' && session.status === 'Pending') {
+    // MAC verified; only Credit path creates orders (never Failed/Cancelled).
     // Do not swallow errors — return 500 so Instamojo retries if DB/email path fails.
     await fulfillInstamojoPaidOrder({
       paymentRequestId,
       paymentId,
       webhookPayload: payload,
       source: 'webhook',
+      trustedPaidVerified: true,
     });
   } else if (status !== 'Credit' && session.status === 'Pending') {
     session.status = 'Failed';
@@ -434,77 +488,87 @@ publicRouter.post('/instamojo/webhook', async (req, res) => {
 });
 
 // GET /api/public/payments/instamojo/redirect
-// Reconciliation: if webhook was missed (sleep, timeout, MAC), user still returns here with
-// payment_id + payment_request_id — verify with Instamojo API and create order idempotently.
+// Reconciliation: if webhook was missed, user returns with payment_id + payment_request_id.
+// We NEVER create orders from query params alone — only after Instamojo API confirms Credit/Completed.
 publicRouter.get('/instamojo/redirect', async (req, res) => {
   const frontendBase = (process.env.FRONTEND_URL || '').replace(/\/+$/, '') || 'http://localhost:5173';
 
   const q = req.query || {};
-  const paymentStatus = String(q.payment_status || '').toLowerCase();
+  const paymentStatusRaw = String(q.payment_status || '');
+  const paymentStatus = paymentStatusRaw.toLowerCase();
   let paymentRequestId = q.payment_request_id || q.paymentRequestId;
   let paymentId = q.payment_id || q.paymentId;
+
+  const isQueryExplicitFailure =
+    FAILED_PAYMENT_STATUSES.has(paymentStatus) || paymentStatus === 'failed';
 
   const isCredit =
     paymentStatus === 'credit' ||
     paymentStatus === 'success' ||
     paymentStatus === 'completed';
 
-  if (isCredit && paymentRequestId && !paymentId) {
+  // Resolve payment_id from API only when we need it — prefer last *credited* payment, not arbitrary last row.
+  if (!isQueryExplicitFailure && paymentRequestId && !paymentId) {
     try {
       const pr = await instamojoGetPaymentRequest(paymentRequestId);
       const payments = Array.isArray(pr.payments) ? pr.payments : [];
-      const last = payments.filter((p) => p && p.id).pop();
-      if (last && last.id) paymentId = last.id;
+      const lastCredited = [...payments].reverse().find((p) => {
+        if (!p || !p.id) return false;
+        const st = String(p.status || '').toLowerCase();
+        if (FAILED_PAYMENT_STATUSES.has(st)) return false;
+        return st === 'credit' || st === 'completed';
+      });
+      if (lastCredited && lastCredited.id) paymentId = lastCredited.id;
     } catch (e) {
       // eslint-disable-next-line no-console
-      console.error('[Instamojo] redirect: could not fetch payment request', e?.message || e);
+      console.error('[Instamojo] redirect: could not fetch payment request for payment_id', e?.message || e);
     }
   }
 
-  if (isCredit && paymentRequestId && paymentId) {
-    try {
-      const pr = await instamojoGetPaymentRequest(paymentRequestId);
-      const ok = paymentRequestContainsCompletedPayment(pr, paymentId);
-      if (!ok) {
-        // eslint-disable-next-line no-console
-        console.warn('[Instamojo] redirect: API list inconclusive; still reconciling (trust redirect)', {
+  // Only reconcile when query suggests success AND we have ids — then require API proof (no "trust redirect").
+  if (!isQueryExplicitFailure && isCredit && paymentRequestId && paymentId) {
+    const verification = await verifyInstamojoRedirectPayment(paymentRequestId, paymentId);
+    if (verification.verified) {
+      try {
+        const result = await fulfillInstamojoPaidOrder({
           paymentRequestId,
           paymentId,
+          webhookPayload: { source: 'redirect_reconciliation', query: { ...q } },
+          source: 'redirect',
+          trustedPaidVerified: true,
         });
+        if (result.created) {
+          // eslint-disable-next-line no-console
+          console.log('[Instamojo] redirect: order created via reconciliation', result.order?.uniqueOrderId);
+        } else if (result.duplicate) {
+          // eslint-disable-next-line no-console
+          console.log('[Instamojo] redirect: order already existed (idempotent)');
+        } else if (result.reason === 'no_session') {
+          // eslint-disable-next-line no-console
+          console.warn('[Instamojo] redirect: no session — cannot create order');
+        } else if (result.reason === 'unverified') {
+          // eslint-disable-next-line no-console
+          console.warn('[Instamojo] redirect: fulfill refused unverified (unexpected)');
+        }
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.error('[Instamojo] redirect: fulfill failed', err?.message || err);
       }
-    } catch (e) {
+    } else {
       // eslint-disable-next-line no-console
-      console.error('[Instamojo] redirect: verify API failed; still reconciling', e?.message || e);
-    }
-
-    try {
-      const result = await fulfillInstamojoPaidOrder({
+      console.warn('[Instamojo] redirect: not fulfilling — API did not confirm paid payment', {
         paymentRequestId,
         paymentId,
-        webhookPayload: { source: 'redirect_reconciliation', query: { ...q } },
-        source: 'redirect',
+        reason: verification.reason,
       });
-      if (result.created) {
-        // eslint-disable-next-line no-console
-        console.log('[Instamojo] redirect: order created via reconciliation', result.order?.uniqueOrderId);
-      } else if (result.duplicate) {
-        // eslint-disable-next-line no-console
-        console.log('[Instamojo] redirect: order already existed (idempotent)');
-      } else if (result.reason === 'no_session') {
-        // eslint-disable-next-line no-console
-        console.warn('[Instamojo] redirect: no session — cannot create order');
-      }
-    } catch (err) {
-      // eslint-disable-next-line no-console
-      console.error('[Instamojo] redirect: fulfill failed', err?.message || err);
     }
   }
 
-  if (isCredit) {
+  if (isCredit && !isQueryExplicitFailure) {
     return res.redirect(`${frontendBase}/account?tab=orders&status=success`);
   }
 
-  const reason = String(paymentStatus || '').toLowerCase() === 'failed' ? 'failed' : 'cancelled';
+  const reason = paymentStatus === 'failed' || paymentStatus === 'failure' ? 'failed' : 'cancelled';
   return res.redirect(`${frontendBase}/checkout?status=payment_failed&reason=${reason}`);
 });
 

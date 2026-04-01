@@ -125,6 +125,82 @@ adminRouter.get('/', async (req, res) => {
   res.json(orders);
 });
 
+/** Start of current calendar month in Asia/Kolkata (for MTD revenue aligned with India). */
+function startOfMonthIst() {
+  const ymd = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+  const [y, m] = ymd.split('-').map(Number);
+  const month = String(m).padStart(2, '0');
+  return new Date(`${y}-${month}-01T00:00:00+05:30`);
+}
+
+const totalAmountToDouble = {
+  $convert: { input: '$totalAmount', to: 'double', onError: 0, onNull: 0 },
+};
+
+// GET /api/admin/orders/stats/dashboard — authoritative sums (must be registered before /:id)
+adminRouter.get('/stats/dashboard', async (req, res) => {
+  const monthStart = startOfMonthIst();
+  const now = new Date();
+
+  const [mtdRow] = await Order.aggregate([
+    { $match: { createdAt: { $gte: monthStart, $lte: now } } },
+    { $group: { _id: null, revenue: { $sum: totalAmountToDouble }, count: { $sum: 1 } } },
+  ]);
+
+  const [allRow] = await Order.aggregate([
+    { $group: { _id: null, revenue: { $sum: totalAmountToDouble }, count: { $sum: 1 } } },
+  ]);
+
+  const customerAgg = await Order.aggregate([
+    {
+      $project: {
+        key: {
+          $let: {
+            vars: {
+              em: { $toLower: { $trim: { input: { $ifNull: ['$customerEmail', ''] } } } },
+              ph: { $trim: { input: { $ifNull: ['$customerPhone', ''] } } },
+              nm: { $ifNull: ['$customerName', ''] },
+            },
+            in: {
+              $cond: [
+                { $gt: [{ $strLenCP: '$$em' }, 0] },
+                '$$em',
+                {
+                  $cond: [
+                    { $gt: [{ $strLenCP: '$$ph' }, 0] },
+                    '$$ph',
+                    {
+                      $cond: [
+                        { $gt: [{ $strLenCP: '$$nm' }, 0] },
+                        '$$nm',
+                        { $toString: '$_id' },
+                      ],
+                    },
+                  ],
+                },
+              ],
+            },
+          },
+        },
+      },
+    },
+    { $group: { _id: '$key' } },
+    { $count: 'n' },
+  ]);
+
+  res.json({
+    revenueMtd: mtdRow?.revenue ?? 0,
+    revenueAllTime: allRow?.revenue ?? 0,
+    orderCount: allRow?.count ?? 0,
+    orderCountMtd: mtdRow?.count ?? 0,
+    customerCount: customerAgg[0]?.n ?? 0,
+    period: {
+      timezone: 'Asia/Kolkata',
+      monthStart: monthStart.toISOString(),
+    },
+  });
+});
+
 // GET /api/admin/orders/:id
 adminRouter.get('/:id', async (req, res) => {
   const order = await Order.findById(req.params.id)
